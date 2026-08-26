@@ -1,0 +1,58 @@
+# Environment Profile: PNQ2 lab vSphere environment.
+#
+# This supplies THIS LAB's specific values for fields that the Catalog (in
+# ../catalog/) defines as officially valid per Red Hat docs. It introduces no
+# new customization surface -- see plan section "vSphere environment defaults
+# (site profile)".
+id: vsphere-pnq2
+platform: vsphere
+description: "Default site profile for the PNQ2 vSphere lab."
+
+vcenter:
+  server: vcenter.vmware.gsslab.pnq2.redhat.com
+  datacenter: OpenShift-DC
+  # username/password are intentionally NOT stored here -- they come from
+  # `clusterbuild credentials set --platform vsphere` (OS keyring), per-user.
+
+datastore: /OpenShift-DC/datastore/OCP-PNQ-Datastore
+compute_cluster: /OpenShift-DC/host/OCP
+resource_pool: /OpenShift-DC/host/OCP/Resources
+network: PNQ2-25G-PUBLIC-PG
+machine_network_cidr: 10.74.232.0/21
+
+failure_domain:
+  name: generated-failure-domain
+  region: generated-region
+  zone: generated-zone
+
+architecture: x86_64
+
+# Pre-shaped blocks referenced by catalog fields with
+# `source: environment_profile` + `env_profile_key: <key>` -- keeps
+# manifest_builder.py generic instead of hardcoding vSphere-shape knowledge.
+derived_blocks:
+  vcenter_block:
+    - server: vcenter.vmware.gsslab.pnq2.redhat.com
+      user: "{{ keyring:vsphere.username }}"
+      password: "{{ keyring:vsphere.password }}"
+      datacenters:
+        - OpenShift-DC
+  failure_domain_block:
+    - name: generated-failure-domain
+      region: generated-region
+      zone: generated-zone
+      server: vcenter.vmware.gsslab.pnq2.redhat.com
+      topology:
+        datacenter: OpenShift-DC
+        computeCluster: /OpenShift-DC/host/OCP
+        resourcePool: /OpenShift-DC/host/OCP/Resources
+        datastore: /OpenShift-DC/datastore/OCP-PNQ-Datastore
+        networks:
+          - PNQ2-25G-PUBLIC-PG
+  assisted_vsphere_block:
+    vCenter: vcenter.vmware.gsslab.pnq2.redhat.com
+    datacenter: OpenShift-DC
+    datastore: /OpenShift-DC/datastore/OCP-PNQ-Datastore
+    cluster: /OpenShift-DC/host/OCP
+    network: PNQ2-25G-PUBLIC-PG
+    folder: /OpenShift-DC/vm

@@ -1,0 +1,127 @@
+# Assisted Installer for vSphere -- self-hosted (podman) or Red Hat SaaS.
+#
+# Source: https://docs.redhat.com/en/documentation/assisted_installer_for_openshift_container_platform/2026/html/installing_openshift_container_platform_with_the_assisted_installer/about-ai
+#         https://github.com/openshift/assisted-service (deploy/podman for self-hosted)
+platform: vsphere
+install_method: assisted
+status: ga
+doc_source: https://docs.redhat.com/en/documentation/assisted_installer_for_openshift_container_platform/2026/html/installing_openshift_container_platform_with_the_assisted_installer/about-ai
+description: >
+  Assisted Installer: same VIP/DNS prerequisites as IPI, but the discovery
+  ISO/orchestration is driven through the assisted-service API instead of a
+  local `openshift-install agent` ISO build. Two backends are supported --
+  pick one per cluster:
+    - self_hosted: assisted-service run via podman on the bastion (no
+      console.redhat.com account required beyond the pull secret).
+    - saas: Red Hat Hybrid Cloud Console (api.openshift.com), authenticated
+      with the user's own offline token.
+backend_options: [self_hosted, saas]
+manifests:
+  - filename: cluster-request.json
+    note: >
+      Assisted Installer is API-driven rather than a single YAML file;
+      ClusterBuild constructs the cluster/infra-env creation payloads from
+      these fields and calls the assisted-service REST API directly.
+    fields:
+      - path: name
+        label: Cluster name
+        type: string
+        required: true
+        source: user_input
+      - path: base_dns_domain
+        label: Base domain
+        type: string
+        required: true
+        source: user_input
+      - path: openshift_version
+        source: derived
+        derived_from: cli.ocp_version
+      - path: pull_secret
+        type: secret
+        required: true
+        source: keyring
+        keyring_key: pull_secret
+      - path: ssh_public_key
+        type: string
+        required: false
+        source: user_input
+      - path: vip_dhcp_allocation
+        value: false
+        source: constant
+        note: "Static VIPs are set explicitly for the PNQ2 environment profile."
+      - path: api_vips
+        label: API VIP(s)
+        type: list[ipv4]
+        required: true
+        source: user_input
+        validate: within_env_profile_cidr
+      - path: ingress_vips
+        label: Ingress VIP(s)
+        type: list[ipv4]
+        required: true
+        source: user_input
+        validate: within_env_profile_cidr
+      - path: platform.vsphere
+        type: object
+        source: environment_profile
+        env_profile_key: assisted_vsphere_block
+        credentials_from: keyring
+        note: >
+          Assisted only requires vCenter integration to be configured
+          post-install per §13.3 of the Assisted Installer vSphere chapter;
+          ClusterBuild still records it here so the backup/audit trail is
+          complete.
+
+provisioning:
+  self_hosted_steps:
+    - id: deploy_assisted_service
+      run: "podman play kube --configmap configmap.yml pod.yml"
+      note: "Run on the bastion; exposes UI on :8080 and API on :8090."
+    - id: create_cluster_and_infra_env
+      note: "POST /api/assisted-install/v2/clusters then /infra-envs via the local API."
+    - id: download_discovery_iso
+      note: "GET infra-envs/{id}/downloads/image-url"
+    - id: upload_iso
+      driver: vsphere
+      action: upload_iso_to_datastore
+    - id: create_and_boot_vms
+      driver: vsphere
+      action: create_vm_from_iso
+      per_host: true
+    - id: wait_ready_and_install
+      note: "Poll cluster status until `ready`, then POST /clusters/{id}/actions/install."
+  saas_steps:
+    - id: authenticate
+      note: "Exchange the user's Red Hat offline token for a 15-minute access token via SSO."
+    - id: create_cluster_and_infra_env
+      note: "Same API shape as self-hosted, against https://api.openshift.com/api/assisted-install/v2/"
+    - id: download_discovery_iso
+    - id: upload_iso
+      driver: vsphere
+      action: upload_iso_to_datastore
+    - id: create_and_boot_vms
+      driver: vsphere
+      action: create_vm_from_iso
+      per_host: true
+    - id: wait_ready_and_install
+
+networking:
+  vip_based: true
+  required_dns:
+    - record: "api.<cluster_name>.<base_domain>"
+      points_to: apiVIP
+      scope: "external + internal"
+    - record: "*.apps.<cluster_name>.<base_domain>"
+      points_to: ingressVIP
+      scope: "external"
+  load_balancer:
+    required: false
+    note: "VIP-based like IPI when using the integrated vSphere platform type."
+  ntp:
+    required: true
+    note: "Assisted validates NTP reachability as part of host readiness checks."
+  firewall_ports:
+    - "TCP 6443 (Kubernetes API) -- from clients to API VIP"
+    - "TCP 443/80 (Ingress) -- from clients to Ingress VIP"
+    - "TCP 8090 (self-hosted assisted-service API) -- from ClusterBuild's bastion driver, if self-hosted"
+    - "UDP 123 (NTP)"

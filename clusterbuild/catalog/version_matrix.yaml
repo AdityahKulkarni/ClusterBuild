@@ -1,0 +1,78 @@
+# OCP version coverage matrix (see plan section "OCP version coverage: 4.18 through OCP 5.x").
+#
+# Adding a new OCP y-stream release is a DATA change here, not a code change:
+# add an entry with `schemaRef` pointing at the nearest catalog version whose
+# field definitions still apply (verified 4.18-4.22 vSphere/Agent field shapes
+# are stable), and a `status` of `ga` (fully docs.redhat.com-sourced) or
+# `preview` (GitHub-sourced only, not yet in docs.redhat.com -- CLI must warn).
+#
+# `clusterbuild catalog check-versions` compares this file against the live
+# docs.redhat.com landing page and openshift/installer branches to flag when
+# a new entry should be added or an existing `preview` entry can be promoted
+# to `ga`.
+
+versions:
+  "4.18":
+    status: ga
+    doc_base: https://docs.redhat.com/en/documentation/openshift_container_platform/4.18
+    schema_ref: "4.18"
+    note: "Baseline catalog schema. All field definitions authored/verified against this version's docs."
+
+  "4.19":
+    status: ga
+    doc_base: https://docs.redhat.com/en/documentation/openshift_container_platform/4.19
+    schema_ref: "4.18"
+    note: "Inherits 4.18 field schema; no breaking install-config/agent-config changes identified for vSphere/Agent/UPI."
+
+  "4.20":
+    status: ga
+    doc_base: https://docs.redhat.com/en/documentation/openshift_container_platform/4.20
+    schema_ref: "4.18"
+    note: "Inherits 4.18 field schema."
+
+  "4.21":
+    status: ga
+    doc_base: https://docs.redhat.com/en/documentation/openshift_container_platform/4.21
+    schema_ref: "4.18"
+    note: "Inherits 4.18 field schema."
+
+  "4.22":
+    status: ga
+    doc_base: https://docs.redhat.com/en/documentation/openshift_container_platform/4.22
+    schema_ref: "4.18"
+    note: "Current GA at time of writing (2026-08-26). Inherits 4.18 field schema."
+
+  "4.23":
+    status: preview
+    doc_base: null
+    github_source: https://github.com/openshift/installer
+    schema_ref: "4.18"
+    note: >
+      `clusterbuild catalog check-versions` flagged a release-4.23 branch on
+      github.com/openshift/installer (verified 2026-08-26) while
+      docs.redhat.com/.../openshift_container_platform/4.23 still 404s and
+      the landing page's latest is 4.22 -- this is the standard "branch cut
+      before GA docs publish" lag, same treatment as the 5.0 entry below.
+      Re-verify field shapes against the 4.23 branch/docs and promote to
+      `status: ga` with a real `doc_base` once docs.redhat.com publishes it.
+
+  "5.0":
+    status: preview
+    doc_base: null
+    github_source: https://github.com/openshift/installer
+    schema_ref: "4.18"
+    note: >
+      docs.redhat.com has not published an OCP 5.0 documentation tree yet
+      (verified 2026-08-26: /openshift_container_platform/5.0 returns 404,
+      landing page still serves 4.22). OCP 5.0 nightly/RC payloads exist
+      (e.g. 5.0.0-0.nightly builds upgrading from 4.22.0-... builds) and
+      appear to continue the same installer architecture, so the 4.18
+      schema is used as a provisional starting point. Every field must be
+      re-verified against github.com/openshift/installer's 5.0 branch/docs
+      before being trusted, and the CLI must warn on every use of a
+      `preview` entry until this is promoted to `status: ga` with a real
+      docs.redhat.com `doc_base`.
+
+# Floor/ceiling used by `clusterbuild` when no --ocp-version is given.
+default_ga_version: "4.22"
+minimum_supported_version: "4.18"

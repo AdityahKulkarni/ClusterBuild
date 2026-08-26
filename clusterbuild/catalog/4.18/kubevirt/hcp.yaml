@@ -1,0 +1,106 @@
+# Hosted Control Planes (HyperShift) on OpenShift Virtualization (KubeVirt)
+#
+# Source: https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/hosted_control_planes/deploying-hosted-control-planes
+#         https://hypershift.pages.dev/how-to/kubevirt/create-kubevirt-cluster/
+platform: kubevirt
+install_method: hcp
+status: ga
+doc_source: https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/hosted_control_planes/deploying-hosted-control-planes
+description: >
+  Hosted Control Planes: unlike IPI/UPI/Agent/Assisted, this does not build
+  an install-config.yaml at all. It creates a HostedCluster + NodePool
+  (control plane pods + KubeVirt worker VMs) against an *already-installed*
+  OpenShift management cluster via the `hcp` CLI. The bastion only needs the
+  `hcp`/`oc` binaries and the management cluster's kubeconfig -- ClusterBuild
+  stages that kubeconfig from an existing ClusterBuild-tracked cluster's
+  backed-up `auth/kubeconfig` before running `hcp create cluster kubevirt`.
+  The "manifest" built/backed up here is a YAML record of the CLI parameters
+  used, for audit/reproducibility, not a file consumed by openshift-install.
+cli_binary: hcp
+infra_provisioning_target: kubevirt
+manifests:
+  - filename: hcp-create-cluster-params.yaml
+    fields:
+      - path: apiVersion
+        value: v1
+        source: constant
+      - path: metadata.name
+        label: Hosted cluster name
+        type: string
+        required: true
+        source: user_input
+        help: "Passed to `hcp create cluster kubevirt --name`."
+      - path: baseDomain
+        label: Base domain (informational -- HyperShift derives routes from the management cluster's ingress domain)
+        type: string
+        required: false
+        default: ""
+        source: user_input
+      - path: namespace
+        label: HyperShift clusters namespace
+        type: string
+        required: true
+        default: clusters
+        source: user_input
+      - path: nodePoolReplicas
+        label: Worker node pool replica count
+        type: int
+        required: true
+        default: 2
+        source: user_input
+      - path: memory
+        label: Per-worker-VM memory (e.g. 8Gi)
+        type: string
+        required: true
+        default: 8Gi
+        source: user_input
+      - path: cores
+        label: Per-worker-VM vCPU cores
+        type: int
+        required: true
+        default: 2
+        source: user_input
+      - path: etcdStorageClass
+        label: Management cluster StorageClass for etcd (e.g. lvm-immediate)
+        type: string
+        required: true
+        source: user_input
+      - path: releaseImage
+        label: Release image override (blank = latest for the selected OCP version)
+        type: string
+        required: false
+        default: ""
+        source: user_input
+      - path: waitTimeout
+        label: "--wait/--timeout duration for `hcp create cluster` (e.g. 45m)"
+        type: string
+        required: true
+        default: 45m
+        source: user_input
+
+networking:
+  vip_based: false
+  management_cluster_prerequisites:
+    - "OpenShift Container Platform 4.14+ management cluster, admin kubeconfig available"
+    - "multicluster engine (MCE) Operator 2.5+ installed, with the hypershift-addon enabled on local-cluster"
+    - "OpenShift Virtualization (KubeVirt) 4.14+ installed on the management cluster"
+    - "OVNKubernetes as the default pod network CNI on the management cluster"
+    - "Wildcard DNS routes enabled: oc patch ingresscontroller -n openshift-ingress-operator default --type=json -p '[{\"op\":\"add\",\"path\":\"/spec/routeAdmission\",\"value\":{\"wildcardPolicy\":\"WildcardsAllowed\"}}]'"
+    - "A LoadBalancer-capable service layer configured (e.g. MetalLB) for the hosted cluster's API/Ingress"
+    - "A default StorageClass configured (ReadWriteMany-capable if enabling live migration)"
+  required_dns:
+    - record: "N/A"
+      points_to: "HyperShift derives hosted-cluster API/Ingress routes from the management cluster's own wildcard ingress domain -- no separate DNS records to create."
+      scope: "n/a"
+  load_balancer:
+    required: false
+    note: "Handled by the management cluster's own LoadBalancer service layer (e.g. MetalLB), configured once per management cluster, not per hosted cluster."
+  ntp:
+    required: false
+    note: "Inherited from the management cluster's nodes."
+  firewall_ports:
+    - "Standard OpenShift management-cluster ingress/API ports only -- no additional per-hosted-cluster firewall rules."
+  bastion_tooling_note: >
+    The bastion used for `hcp create cluster kubevirt` needs the `hcp` and
+    `oc` CLIs, not govc/Prism Central tooling -- `bastion register` treats
+    `hcp` as optional tooling, same as govc/nmstatectl.

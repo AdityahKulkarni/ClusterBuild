@@ -1,0 +1,99 @@
+# AWS Installer-Provisioned Infrastructure (IPI)
+#
+# Source: https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/installing_on_aws/installer-provisioned-infrastructure
+#         https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/installing_on_aws/installation-config-parameters-aws
+platform: aws
+install_method: ipi
+status: ga
+doc_source: https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/installing_on_aws/installer-provisioned-infrastructure
+description: >
+  Installer-provisioned infrastructure on AWS: openshift-install drives its
+  own Terraform providers directly against the AWS API to create the VPC (or
+  reuse an existing one), the API/Ingress load balancers, and the
+  bootstrap/control-plane/compute EC2 instances. No custom driver is used
+  here (contrast with vSphere/Nutanix) -- the installer provisions
+  everything itself once AWS credentials are staged on the bastion. Per the
+  plan, cloud platforms are DHCP/dynamic-IP only; static IP is limited to
+  vSphere/Nutanix.
+cli_binary: openshift-install
+manifests:
+  - filename: install-config.yaml
+    fields:
+      - path: apiVersion
+        value: v1
+        source: constant
+      - path: metadata.name
+        label: Cluster name
+        type: string
+        required: true
+        source: user_input
+        help: "DNS-safe cluster name; forms api.<name>.<baseDomain>."
+      - path: baseDomain
+        label: Base domain
+        type: string
+        required: true
+        source: user_input
+        help: "Must match an existing public Route53 hosted zone in this AWS account."
+      - path: pullSecret
+        label: Pull secret
+        type: secret
+        required: true
+        source: keyring
+        keyring_key: pull_secret
+      - path: sshKey
+        label: SSH public key
+        type: string
+        required: false
+        source: user_input
+      - path: controlPlane.name
+        value: master
+        source: constant
+      - path: controlPlane.replicas
+        label: Control plane node count
+        type: int
+        required: true
+        default: 3
+        source: user_input
+      - path: compute.name
+        value: worker
+        source: constant
+      - path: compute.replicas
+        label: Worker node count
+        type: int
+        required: true
+        default: 3
+        source: user_input
+      - path: platform.aws.region
+        type: string
+        source: environment_profile
+        env_profile_key: region
+
+networking:
+  vip_based: false
+  required_dns:
+    - record: "<base_domain> public hosted zone"
+      points_to: "N/A -- installer creates api/*.apps records in an existing Route53 public hosted zone"
+      scope: "external"
+    - record: "<cluster_name>-int.<base_domain> private hosted zone"
+      points_to: "N/A -- installer creates this automatically alongside the VPC"
+      scope: "internal"
+  load_balancer:
+    required: false
+    note: "Not required from the user -- the installer creates its own Network Load Balancers (API) and Classic/NLB (Ingress)."
+  ntp:
+    required: false
+    note: "EC2 instances sync via the Amazon Time Sync Service by default."
+  firewall_ports:
+    - "TCP 6443 (Kubernetes API) -- installer-managed security groups"
+    - "TCP 443/80 (Ingress) -- installer-managed security groups"
+  credentials_doc: https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/installing_on_aws/installer-provisioned-infrastructure
+  credentials_note: >
+    `clusterbuild credentials set --platform aws` stores an IAM access
+    key/secret key in the OS keyring; ClusterBuild stages them into
+    ~/.aws/credentials on the bastion immediately before running
+    `openshift-install create cluster` (never written into
+    install-config.yaml). Prefer a scoped IAM user/role dedicated to
+    OpenShift installs per the docs' minimum permissions list, and rotate
+    the access key regularly since AWS does not support the short-lived STS
+    session tokens `openshift-install` itself requests without an existing
+    AWS CLI credential chain already configured on the bastion.

@@ -1,0 +1,107 @@
+# Assisted Installer for Nutanix -- self-hosted (podman) or Red Hat SaaS.
+#
+# Nutanix is one of Assisted Installer's supported platforms alongside
+# bare metal and vSphere.
+# Source: https://docs.redhat.com/en/documentation/assisted_installer_for_openshift_container_platform/2026/html/installing_openshift_container_platform_with_the_assisted_installer/about-ai
+platform: nutanix
+install_method: assisted
+status: ga
+doc_source: https://docs.redhat.com/en/documentation/assisted_installer_for_openshift_container_platform/2026/html/installing_openshift_container_platform_with_the_assisted_installer/about-ai
+description: >
+  Assisted Installer targeting Nutanix: same VIP/DNS prerequisites as
+  Nutanix IPI. Post-install, Nutanix platform integration (CCM/CSI) is
+  configured via the assisted-service Nutanix configuration step, mirroring
+  the vSphere Assisted entry.
+backend_options: [self_hosted, saas]
+manifests:
+  - filename: cluster-request.json
+    fields:
+      - path: name
+        label: Cluster name
+        type: string
+        required: true
+        source: user_input
+      - path: base_dns_domain
+        label: Base domain
+        type: string
+        required: true
+        source: user_input
+      - path: openshift_version
+        source: derived
+        derived_from: cli.ocp_version
+      - path: pull_secret
+        type: secret
+        required: true
+        source: keyring
+        keyring_key: pull_secret
+      - path: ssh_public_key
+        type: string
+        required: false
+        source: user_input
+      - path: vip_dhcp_allocation
+        value: false
+        source: constant
+      - path: api_vips
+        label: API VIP(s)
+        type: list[ipv4]
+        required: true
+        source: user_input
+        validate: within_env_profile_cidr
+      - path: ingress_vips
+        label: Ingress VIP(s)
+        type: list[ipv4]
+        required: true
+        source: user_input
+        validate: within_env_profile_cidr
+      - path: platform.nutanix
+        type: object
+        source: environment_profile
+        env_profile_key: prism_central_block
+        credentials_from: keyring
+
+provisioning:
+  self_hosted_steps:
+    - id: deploy_assisted_service
+      run: "podman play kube --configmap configmap.yml pod.yml"
+    - id: create_cluster_and_infra_env
+    - id: download_discovery_iso
+    - id: upload_iso
+      driver: nutanix
+      action: upload_iso_to_datastore
+    - id: create_and_boot_vms
+      driver: nutanix
+      action: create_vm_from_iso
+      per_host: true
+    - id: wait_ready_and_install
+  saas_steps:
+    - id: authenticate
+    - id: create_cluster_and_infra_env
+    - id: download_discovery_iso
+    - id: upload_iso
+      driver: nutanix
+      action: upload_iso_to_datastore
+    - id: create_and_boot_vms
+      driver: nutanix
+      action: create_vm_from_iso
+      per_host: true
+    - id: wait_ready_and_install
+
+networking:
+  vip_based: true
+  required_dns:
+    - record: "api.<cluster_name>.<base_domain>"
+      points_to: apiVIP
+      scope: "external + internal"
+    - record: "*.apps.<cluster_name>.<base_domain>"
+      points_to: ingressVIP
+      scope: "external"
+  load_balancer:
+    required: false
+  ntp:
+    required: true
+  firewall_ports:
+    - "TCP 6443 (Kubernetes API) -- from clients to API VIP"
+    - "TCP 443/80 (Ingress) -- from clients to Ingress VIP"
+    - "TCP 9440 -- ClusterBuild/openshift-install to Prism Central"
+    - "TCP 8090 (self-hosted assisted-service API), if self-hosted"
+    - "UDP 123 (NTP)"

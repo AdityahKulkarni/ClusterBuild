@@ -1,0 +1,15 @@
+# Environment Profile: Azure lab placeholder.
+#
+# No real Azure subscription details were provided for this project -- fill
+# in the values below for your own subscription/region before using
+# --platform azure. Service principal credentials themselves are NOT stored
+# here -- see `clusterbuild credentials set --platform azure` (clientId/
+# clientSecret/tenantId/subscriptionId, staged onto the bastion's
+# ~/.azure/osServicePrincipal.json at install time).
+id: azure-lab
+platform: azure
+description: "Template Azure environment profile -- replace every value below with your subscription's real details."
+
+region: "REPLACE-WITH-YOUR-AZURE-REGION"  # e.g. centralus
+base_domain_resource_group_name: "REPLACE-WITH-YOUR-DNS-ZONE-RESOURCE-GROUP"  # resource group containing the public DNS zone for baseDomain
+architecture: x86_64

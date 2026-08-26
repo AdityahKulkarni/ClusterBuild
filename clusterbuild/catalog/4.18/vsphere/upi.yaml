@@ -1,0 +1,167 @@
+# vSphere User-Provisioned Infrastructure (UPI)
+#
+# Source: https://docs.redhat.com/en/documentation/openshift_container_platform/4.15/html/installing_on_vsphere/user-provisioned-infrastructure
+#         https://github.com/openshift/installer/blob/master/docs/user/vsphere/install_upi.md
+platform: vsphere
+install_method: upi
+status: ga
+doc_source: https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/installing_on_vsphere/user-provisioned-infrastructure
+description: >
+  User-provisioned infrastructure: ClusterBuild generates install-config.yaml
+  and the ignition configs, then drives the vSphere platform driver (govc) to
+  create and boot the bootstrap/master/worker VMs from the RHCOS OVA, in the
+  order and with the guestinfo settings the docs specify. Requires an
+  external load balancer and the full DNS record set (unlike IPI).
+cli_binary: openshift-install
+manifests:
+  - filename: install-config.yaml
+    fields:
+      - path: apiVersion
+        value: v1
+        source: constant
+      - path: metadata.name
+        label: Cluster name
+        type: string
+        required: true
+        source: user_input
+      - path: baseDomain
+        label: Base domain
+        type: string
+        required: true
+        source: user_input
+      - path: pullSecret
+        label: Pull secret
+        type: secret
+        required: true
+        source: keyring
+        keyring_key: pull_secret
+      - path: sshKey
+        label: SSH public key
+        type: string
+        required: false
+        source: user_input
+      - path: controlPlane.name
+        value: master
+        source: constant
+      - path: controlPlane.replicas
+        label: Control plane node count
+        type: int
+        required: true
+        default: 3
+        source: user_input
+      - path: compute.name
+        value: worker
+        source: constant
+      - path: compute.replicas
+        label: Worker node count
+        type: int
+        required: true
+        default: 3
+        source: user_input
+      - path: networking.machineNetwork
+        type: list
+        source: environment_profile
+        env_profile_key: machine_network_cidr
+        transform: wrap_cidr_list
+      - path: platform
+        value: {vsphere: {}}
+        source: constant
+        note: "Minimal vsphere platform stanza -- no apiVIPs/ingressVIPs for UPI; VIPs are owned by the external load balancer."
+
+provisioning:
+  ova_source: "RHCOS OVA matching the selected OCP version, downloaded from the release image mirror"
+  steps:
+    - id: create_ignition_configs
+      run: "openshift-install create ignition-configs --dir <install_dir>"
+      produces: [bootstrap.ign, master.ign, worker.ign, metadata.json]
+    - id: serve_bootstrap_ignition
+      driver: bastion
+      note: "bootstrap.ign must be served over HTTP reachable by the bootstrap VM; ClusterBuild serves it from the bastion install dir."
+    - id: upload_ova_template
+      driver: vsphere
+      action: import_ova_as_template
+    - id: clone_bootstrap_vm
+      driver: vsphere
+      action: clone_vm
+      guestinfo:
+        - "guestinfo.ignition.config.data=<base64 of a small merge ignition pointing at the bootstrap.ign HTTP URL>"
+        - "guestinfo.ignition.config.data.encoding=base64"
+        - "disk.EnableUUID=TRUE"
+        - "stealclock.enable=TRUE"
+    - id: clone_master_vms
+      driver: vsphere
+      action: clone_vm
+      count_from: controlPlane.replicas
+      guestinfo:
+        - "guestinfo.ignition.config.data=<base64 of master.ign>"
+        - "guestinfo.ignition.config.data.encoding=base64"
+        - "disk.EnableUUID=TRUE"
+    - id: clone_worker_vms
+      driver: vsphere
+      action: clone_vm
+      count_from: compute.replicas
+      guestinfo:
+        - "guestinfo.ignition.config.data=<base64 of worker.ign>"
+        - "guestinfo.ignition.config.data.encoding=base64"
+        - "disk.EnableUUID=TRUE"
+    - id: power_on_bootstrap
+      driver: vsphere
+      action: power_on
+    - id: wait_bootstrap_complete
+      run: "openshift-install wait-for bootstrap-complete --dir <install_dir> --log-level=info"
+    - id: power_on_masters_and_workers
+      driver: vsphere
+      action: power_on
+      note: "Power on at least 2 workers before continuing per the docs."
+    - id: remove_bootstrap_from_lb
+      note: "Remove the bootstrap node from the 6443/22623 load-balancer pools once bootstrap completes."
+    - id: destroy_bootstrap_vm
+      driver: vsphere
+      action: destroy_vm
+    - id: wait_install_complete
+      run: "openshift-install wait-for install-complete --dir <install_dir> --log-level=info"
+
+networking:
+  vip_based: false
+  required_dns:
+    - record: "api.<cluster_name>.<base_domain>"
+      points_to: "API load balancer"
+      scope: "external + internal"
+    - record: "api-int.<cluster_name>.<base_domain>"
+      points_to: "API load balancer"
+      scope: "internal (nodes only)"
+    - record: "*.apps.<cluster_name>.<base_domain>"
+      points_to: "Ingress load balancer"
+      scope: "external"
+    - record: "bootstrap.<cluster_name>.<base_domain>"
+      points_to: "bootstrap node"
+      scope: "internal, plus PTR"
+    - record: "<control-plane-hostname>.<cluster_name>.<base_domain>"
+      points_to: "each control-plane node"
+      scope: "internal, plus PTR, one per control-plane node"
+    - record: "<worker-hostname>.<cluster_name>.<base_domain>"
+      points_to: "each worker node"
+      scope: "internal, plus PTR, one per worker node"
+  load_balancer:
+    required: true
+    pools:
+      - port: 6443
+        backends: "bootstrap + control-plane nodes (remove bootstrap once bootstrap completes)"
+        purpose: "Kubernetes API"
+      - port: 22623
+        backends: "bootstrap + control-plane nodes"
+        purpose: "Machine Config Server"
+      - port: 443
+        backends: "worker nodes (or control-plane nodes in a compact/3-node cluster)"
+        purpose: "HTTPS ingress"
+      - port: 80
+        backends: "worker nodes (or control-plane nodes in a compact/3-node cluster)"
+        purpose: "HTTP ingress"
+  ntp:
+    required: true
+    note: "chrony on RHCOS; UDP 123 must be reachable if using an external enterprise NTP source."
+  firewall_ports:
+    - "TCP 6443, 22623 -- clients/nodes to API load balancer"
+    - "TCP 443, 80 -- clients to Ingress load balancer"
+    - "UDP 123 -- NTP, if external"
+  vcenter_permissions_doc: https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/installing_on_vsphere/user-provisioned-infrastructure

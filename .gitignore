@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+*.spec
+.coverage
+htmlcov/
+
+# Local runtime state (see core/config.py) -- never commit a team member's
+# own credentials/backups/job logs.
+.clusterbuild/

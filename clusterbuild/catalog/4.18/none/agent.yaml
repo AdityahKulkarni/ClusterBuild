@@ -1,0 +1,150 @@
+# Platform-agnostic ("platform: none") Agent-based Installer, static IP via NMState.
+#
+# Source: https://docs.redhat.com/en/documentation/openshift_container_platform/4.20/html/installing_an_on-premise_cluster_with_the_agent-based_installer/preparing-to-install-with-agent-based-installer
+platform: none
+install_method: agent
+infra_provisioning_target: vsphere
+status: ga
+doc_source: https://docs.redhat.com/en/documentation/openshift_container_platform/4.20/html/installing_an_on-premise_cluster_with_the_agent-based_installer/preparing-to-install-with-agent-based-installer
+description: >
+  Agent-based install with `platform: none`. Requires networkType:
+  OVNKubernetes and a mandatory external load balancer (no apiVIPs/
+  ingressVIPs -- those are only valid for platform baremetal/vsphere).
+  Static IP configuration via agent-config.yaml `hosts[].networkConfig`
+  (NMState) works identically to the vsphere-platform Agent entry -- static
+  IP is not platform-gated. VMs are still created via the vSphere driver.
+cli_binary: openshift-install
+manifests:
+  - filename: install-config.yaml
+    fields:
+      - path: apiVersion
+        value: v1
+        source: constant
+      - path: metadata.name
+        label: Cluster name
+        type: string
+        required: true
+        source: user_input
+      - path: baseDomain
+        label: Base domain
+        type: string
+        required: true
+        source: user_input
+      - path: pullSecret
+        label: Pull secret
+        type: secret
+        required: true
+        source: keyring
+        keyring_key: pull_secret
+      - path: sshKey
+        label: SSH public key
+        type: string
+        required: false
+        source: user_input
+      - path: controlPlane.name
+        value: master
+        source: constant
+      - path: controlPlane.replicas
+        label: Control plane node count
+        type: int
+        required: true
+        default: 3
+        source: user_input
+      - path: compute.name
+        value: worker
+        source: constant
+      - path: compute.replicas
+        label: Worker node count
+        type: int
+        required: true
+        default: 2
+        source: user_input
+      - path: networking.networkType
+        value: OVNKubernetes
+        source: constant
+        note: "Required for platform: none on the Agent-based Installer."
+      - path: networking.machineNetwork
+        type: list
+        source: environment_profile
+        env_profile_key: machine_network_cidr
+        transform: wrap_cidr_list
+      - path: platform
+        value: {none: {}}
+        source: constant
+
+  - filename: agent-config.yaml
+    fields:
+      - path: apiVersion
+        value: v1beta1
+        source: constant
+      - path: kind
+        value: AgentConfig
+        source: constant
+      - path: rendezvousIP
+        label: Rendezvous host IP
+        type: ipv4
+        required: true
+        source: user_input
+        validate: within_env_profile_cidr
+      - path: hosts
+        label: Per-host static network configuration
+        type: list[host]
+        required: true
+        source: user_input
+        item_schema:
+          - {field: hostname, type: string, required: true}
+          - {field: role, type: "enum[master,worker]", required: true}
+          - {field: interface_name, type: string, required: true, default: eth0}
+          - {field: mac_address, type: mac, required: true}
+          - {field: ip_address, type: ipv4, required: true, validate: within_env_profile_cidr}
+          - {field: prefix_length, type: int, required: true, default: 21}
+          - {field: gateway, type: ipv4, required: true}
+          - {field: dns_server, type: ipv4, required: true}
+        transform: hosts_to_nmstate
+      - path: additionalNTPSources
+        type: list
+        required: false
+        source: user_input
+
+provisioning:
+  reused_driver: vsphere
+  note: "Same ISO build/upload/boot sequence as catalog/4.18/vsphere/agent.yaml#provisioning, minus any vSphere fields in the manifest itself."
+  steps_ref: "clusterbuild.catalog/4.18/vsphere/agent.yaml#provisioning.steps"
+
+networking:
+  vip_based: false
+  required_dns:
+    - record: "api.<cluster_name>.<base_domain>"
+      points_to: "API load balancer"
+      scope: "external + internal"
+    - record: "api-int.<cluster_name>.<base_domain>"
+      points_to: "API load balancer"
+      scope: "internal"
+    - record: "*.apps.<cluster_name>.<base_domain>"
+      points_to: "Ingress load balancer"
+      scope: "external"
+  load_balancer:
+    required: true
+    note: "Mandatory for multi-node platform: none Agent installs. Single-node (SNO) installs are exempt."
+    pools:
+      - port: 6443
+        backends: "bootstrap/rendezvous + control-plane nodes"
+        purpose: "Kubernetes API"
+      - port: 22623
+        backends: "bootstrap/rendezvous + control-plane nodes"
+        purpose: "Machine Config Server"
+      - port: 443
+        backends: "worker nodes"
+        purpose: "HTTPS ingress"
+      - port: 80
+        backends: "worker nodes"
+        purpose: "HTTP ingress"
+  ntp:
+    required: true
+  firewall_ports:
+    - "TCP 6443, 22623 -- to the external load balancer"
+    - "TCP 443, 80 -- to the external load balancer"
+    - "UDP 123 -- NTP, if external"
+  capability_notes:
+    - "No Machine API, no cloud CCM, no platform CSI -- same limitations as the none/upi entry."
+    - "networkType must be OVNKubernetes."

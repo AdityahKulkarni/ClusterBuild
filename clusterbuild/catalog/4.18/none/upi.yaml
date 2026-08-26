@@ -1,0 +1,124 @@
+# Platform-agnostic ("platform: none") UPI.
+#
+# VMs are still provisioned on vSphere infra (via the `infra_provisioning_target:
+# vsphere` driver), but install-config.yaml never receives a vSphere platform
+# block, credentials, or VIPs -- OCP treats the nodes as generic infrastructure.
+#
+# Source: https://docs.redhat.com/en/documentation/openshift_container_platform/4.17/html/installing_on_any_platform/index
+#         https://docs.redhat.com/en/documentation/openshift_container_platform/4.17/html/installing_on_any_platform/installing-platform-agnostic
+platform: none
+install_method: upi
+infra_provisioning_target: vsphere
+status: ga
+doc_source: https://docs.redhat.com/en/documentation/openshift_container_platform/4.17/html/installing_on_any_platform/installing-platform-agnostic
+description: >
+  Provider-independent UPI. `platform: none` means no Machine API, no cloud
+  CCM, no platform CSI, and this cannot be changed after install. An external
+  load balancer + full DNS record set is mandatory -- there is no
+  installer-managed VIP mechanism for this platform value. VMs are created on
+  the same vSphere infra as the vsphere-platform methods, using the same
+  driver, but the manifest below intentionally omits every vSphere-specific
+  field.
+cli_binary: openshift-install
+manifests:
+  - filename: install-config.yaml
+    fields:
+      - path: apiVersion
+        value: v1
+        source: constant
+      - path: metadata.name
+        label: Cluster name
+        type: string
+        required: true
+        source: user_input
+      - path: baseDomain
+        label: Base domain
+        type: string
+        required: true
+        source: user_input
+      - path: pullSecret
+        label: Pull secret
+        type: secret
+        required: true
+        source: keyring
+        keyring_key: pull_secret
+      - path: sshKey
+        label: SSH public key
+        type: string
+        required: false
+        source: user_input
+      - path: controlPlane.name
+        value: master
+        source: constant
+      - path: controlPlane.replicas
+        label: Control plane node count
+        type: int
+        required: true
+        default: 3
+        source: user_input
+      - path: compute.name
+        value: worker
+        source: constant
+      - path: compute.replicas
+        value: 0
+        source: constant
+        note: "Required to be 0 for platform: none -- the installer never creates compute machines; you provision all nodes yourself."
+      - path: networking.machineNetwork
+        type: list
+        source: environment_profile
+        env_profile_key: machine_network_cidr
+        transform: wrap_cidr_list
+      - path: platform
+        value: {none: {}}
+        source: constant
+
+provisioning:
+  reused_driver: vsphere
+  note: >
+    Same govc-based VM provisioning sequence as the `vsphere` UPI entry
+    (catalog/4.18/vsphere/upi.yaml#provisioning) -- ISO/OVA, guestinfo
+    ignition delivery, bootstrap-then-masters-then-workers boot order -- but
+    no vSphere credentials or config are written into install-config.yaml.
+  steps_ref: "clusterbuild.catalog/4.18/vsphere/upi.yaml#provisioning.steps"
+
+networking:
+  vip_based: false
+  required_dns:
+    - record: "api.<cluster_name>.<base_domain>"
+      points_to: "API load balancer"
+      scope: "external + internal"
+    - record: "api-int.<cluster_name>.<base_domain>"
+      points_to: "API load balancer"
+      scope: "internal (nodes only)"
+    - record: "*.apps.<cluster_name>.<base_domain>"
+      points_to: "Ingress load balancer"
+      scope: "external"
+    - record: "<node-hostname>.<cluster_name>.<base_domain>"
+      points_to: "each node"
+      scope: "internal, plus PTR, one per node"
+  load_balancer:
+    required: true
+    note: "Mandatory -- platform: none has no installer-managed VIPs at all."
+    pools:
+      - port: 6443
+        backends: "bootstrap + control-plane nodes"
+        purpose: "Kubernetes API"
+      - port: 22623
+        backends: "bootstrap + control-plane nodes"
+        purpose: "Machine Config Server"
+      - port: 443
+        backends: "worker/compute nodes"
+        purpose: "HTTPS ingress"
+      - port: 80
+        backends: "worker/compute nodes"
+        purpose: "HTTP ingress"
+  ntp:
+    required: true
+  firewall_ports:
+    - "TCP 6443, 22623 -- to the external load balancer"
+    - "TCP 443, 80 -- to the external load balancer"
+    - "UDP 123 -- NTP, if external"
+  capability_notes:
+    - "No Machine API: cannot scale via MachineSets or the cluster autoscaler."
+    - "No cloud controller manager / platform CSI: image registry Operator starts `Removed` until you configure storage."
+    - "This cannot be changed after installation -- choose `vsphere` UPI instead if CSI/CCM/zones are wanted."

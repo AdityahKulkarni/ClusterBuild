@@ -1,0 +1,15 @@
+# Environment Profile: GCP lab placeholder.
+#
+# No real GCP project details were provided for this project -- fill in the
+# values below for your own project/region before using --platform gcp.
+# The service-account key itself is NOT stored here -- see
+# `clusterbuild credentials set --platform gcp` (pasted service-account
+# JSON, staged onto the bastion's ~/.gcp/osServiceAccount.json at install
+# time).
+id: gcp-lab
+platform: gcp
+description: "Template GCP environment profile -- replace every value below with your project's real details."
+
+project_id: "REPLACE-WITH-YOUR-GCP-PROJECT-ID"
+region: "REPLACE-WITH-YOUR-GCP-REGION"  # e.g. us-east1
+architecture: x86_64

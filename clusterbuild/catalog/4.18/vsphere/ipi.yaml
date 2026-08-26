@@ -1,0 +1,110 @@
+# vSphere Installer-Provisioned Infrastructure (IPI)
+#
+# Source: https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/installing_on_vmware_vsphere/installer-provisioned-infrastructure
+#         https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/installing_on_vmware_vsphere/installation-config-parameters-vsphere
+#         https://github.com/openshift/installer/blob/main/docs/user/vsphere/vips-dns.md
+platform: vsphere
+install_method: ipi
+status: ga
+doc_source: https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/installing_on_vmware_vsphere/installer-provisioned-infrastructure
+description: >
+  Installer-provisioned infrastructure: openshift-install provisions the
+  bootstrap/control-plane/compute VMs directly against vCenter. No external
+  load balancer is required -- keepalived on the nodes owns the API/Ingress
+  VIPs.
+cli_binary: openshift-install
+manifests:
+  - filename: install-config.yaml
+    fields:
+      - path: apiVersion
+        value: v1
+        source: constant
+      - path: metadata.name
+        label: Cluster name
+        type: string
+        required: true
+        source: user_input
+        doc_source: https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/installing_on_vmware_vsphere/installer-provisioned-infrastructure
+        help: "DNS-safe cluster name; forms api.<name>.<baseDomain>."
+      - path: baseDomain
+        label: Base domain
+        type: string
+        required: true
+        source: user_input
+      - path: pullSecret
+        label: Pull secret
+        type: secret
+        required: true
+        source: keyring
+        keyring_key: pull_secret
+      - path: sshKey
+        label: SSH public key
+        type: string
+        required: false
+        source: user_input
+      - path: controlPlane.name
+        value: master
+        source: constant
+      - path: controlPlane.replicas
+        label: Control plane node count
+        type: int
+        required: true
+        default: 3
+        source: user_input
+      - path: compute.name
+        value: worker
+        source: constant
+      - path: compute.replicas
+        label: Worker node count
+        type: int
+        required: true
+        default: 3
+        source: user_input
+      - path: networking.machineNetwork
+        type: list
+        source: environment_profile
+        env_profile_key: machine_network_cidr
+        transform: wrap_cidr_list
+      - path: platform.vsphere.vcenters
+        type: list
+        source: environment_profile
+        env_profile_key: vcenter_block
+        credentials_from: keyring
+      - path: platform.vsphere.failureDomains
+        type: list
+        source: environment_profile
+        env_profile_key: failure_domain_block
+      - path: platform.vsphere.apiVIPs
+        label: API VIP(s)
+        type: list[ipv4]
+        required: true
+        source: user_input
+        validate: within_env_profile_cidr
+        doc_source: https://github.com/openshift/installer/blob/main/docs/user/vsphere/vips-dns.md
+      - path: platform.vsphere.ingressVIPs
+        label: Ingress VIP(s)
+        type: list[ipv4]
+        required: true
+        source: user_input
+        validate: within_env_profile_cidr
+
+networking:
+  vip_based: true
+  required_dns:
+    - record: "api.<cluster_name>.<base_domain>"
+      points_to: apiVIP
+      scope: "external + internal"
+    - record: "*.apps.<cluster_name>.<base_domain>"
+      points_to: ingressVIP
+      scope: "external"
+  load_balancer:
+    required: false
+    note: "Not required -- keepalived on the nodes assigns the API/Ingress VIPs (VRRP)."
+  ntp:
+    required: true
+    note: "NTP discoverable via DHCP recommended; ensure ESXi host time sync is correct."
+  firewall_ports:
+    - "TCP 6443 (Kubernetes API) -- from clients to API VIP"
+    - "TCP 443/80 (Ingress) -- from clients to Ingress VIP"
+    - "UDP 123 (NTP) -- if using external NTP servers"
+  vcenter_permissions_doc: https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/installing_on_vmware_vsphere/installer-provisioned-infrastructure

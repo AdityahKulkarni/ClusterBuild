@@ -1,0 +1,170 @@
+# vSphere Agent-based Installer, with static-IP support via NMState.
+#
+# Source: https://docs.redhat.com/en/documentation/openshift_container_platform/4.20/html/installing_an_on-premise_cluster_with_the_agent-based_installer/preparing-to-install-with-agent-based-installer
+#         https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/installing_an_on-premise_cluster_with_the_agent-based_installer/installation-config-parameters-agent
+#         https://docs.redhat.com/en/documentation/assisted_installer_for_openshift_container_platform/2026/html/installing_openshift_container_platform_with_the_assisted_installer/index (vSphere ISO boot, govc)
+platform: vsphere
+install_method: agent
+status: ga
+doc_source: https://docs.redhat.com/en/documentation/openshift_container_platform/4.20/html/installing_an_on-premise_cluster_with_the_agent-based_installer/preparing-to-install-with-agent-based-installer
+description: >
+  Agent-based Installer: builds a discovery/install ISO (openshift-install
+  agent create image) embedding the Assisted discovery agent, uploads it to
+  the vSphere datastore, boots one VM per host from it, and lets the
+  rendezvous host drive the install. Supports static IP per host via NMState
+  in agent-config.yaml regardless of the `platform` value.
+cli_binary: openshift-install
+manifests:
+  - filename: install-config.yaml
+    fields:
+      - path: apiVersion
+        value: v1
+        source: constant
+      - path: metadata.name
+        label: Cluster name
+        type: string
+        required: true
+        source: user_input
+      - path: baseDomain
+        label: Base domain
+        type: string
+        required: true
+        source: user_input
+      - path: pullSecret
+        label: Pull secret
+        type: secret
+        required: true
+        source: keyring
+        keyring_key: pull_secret
+      - path: sshKey
+        label: SSH public key
+        type: string
+        required: false
+        source: user_input
+      - path: controlPlane.name
+        value: master
+        source: constant
+      - path: controlPlane.replicas
+        label: Control plane node count
+        type: int
+        required: true
+        default: 3
+        source: user_input
+      - path: compute.name
+        value: worker
+        source: constant
+      - path: compute.replicas
+        label: Worker node count
+        type: int
+        required: true
+        default: 2
+        source: user_input
+      - path: networking.machineNetwork
+        type: list
+        source: environment_profile
+        env_profile_key: machine_network_cidr
+        transform: wrap_cidr_list
+      - path: platform.vsphere.vcenters
+        type: list
+        source: environment_profile
+        env_profile_key: vcenter_block
+        credentials_from: keyring
+      - path: platform.vsphere.failureDomains
+        type: list
+        source: environment_profile
+        env_profile_key: failure_domain_block
+      - path: platform.vsphere.apiVIPs
+        label: API VIP(s)
+        type: list[ipv4]
+        required: true
+        source: user_input
+        validate: within_env_profile_cidr
+      - path: platform.vsphere.ingressVIPs
+        label: Ingress VIP(s)
+        type: list[ipv4]
+        required: true
+        source: user_input
+        validate: within_env_profile_cidr
+
+  - filename: agent-config.yaml
+    fields:
+      - path: apiVersion
+        value: v1beta1
+        source: constant
+      - path: kind
+        value: AgentConfig
+        source: constant
+      - path: metadata.name
+        source: derived
+        derived_from: install-config.yaml#metadata.name
+        note: "Ignored by the installer for agent-config.yaml but kept for readability; the cluster name always comes from install-config.yaml."
+      - path: rendezvousIP
+        label: Rendezvous host IP
+        type: ipv4
+        required: true
+        source: user_input
+        validate: within_env_profile_cidr
+        help: "IP of the host that will run assisted-service and bootstrap the rest of the cluster; required unless every host defines a static IP."
+      - path: hosts
+        label: Per-host static network configuration
+        type: list[host]
+        required: true
+        source: user_input
+        item_schema:
+          - {field: hostname, type: string, required: true}
+          - {field: role, type: "enum[master,worker]", required: true}
+          - {field: interface_name, type: string, required: true, default: eth0}
+          - {field: mac_address, type: mac, required: true}
+          - {field: ip_address, type: ipv4, required: true, validate: within_env_profile_cidr}
+          - {field: prefix_length, type: int, required: true, default: 21}
+          - {field: gateway, type: ipv4, required: true}
+          - {field: dns_server, type: ipv4, required: true}
+        transform: hosts_to_nmstate
+        help: >
+          Rendered into NMState under hosts[].networkConfig per
+          https://docs.redhat.com/en/documentation/openshift_container_platform/4.20/html/installing_an_on-premise_cluster_with_the_agent-based_installer/preparing-to-install-with-agent-based-installer
+      - path: additionalNTPSources
+        type: list
+        required: false
+        source: user_input
+
+provisioning:
+  steps:
+    - id: create_agent_iso
+      run: "openshift-install --dir <install_dir> agent create image"
+      produces: [agent.x86_64.iso]
+    - id: upload_iso
+      driver: vsphere
+      action: upload_iso_to_datastore
+    - id: create_and_boot_vms
+      driver: vsphere
+      action: create_vm_from_iso
+      per_host: true
+      settings:
+        - "disk.EnableUUID=TRUE"
+        - "iso-datastore=<env_profile.datastore>"
+    - id: wait_bootstrap_complete
+      run: "openshift-install --dir <install_dir> agent wait-for bootstrap-complete"
+    - id: wait_install_complete
+      run: "openshift-install --dir <install_dir> agent wait-for install-complete"
+
+networking:
+  vip_based: true
+  required_dns:
+    - record: "api.<cluster_name>.<base_domain>"
+      points_to: apiVIP
+      scope: "external + internal"
+    - record: "*.apps.<cluster_name>.<base_domain>"
+      points_to: ingressVIP
+      scope: "external"
+  load_balancer:
+    required: false
+    note: "Same as IPI on vSphere -- VIP-based, no external LB required when platform is vsphere."
+  ntp:
+    required: true
+    note: "Set additionalNTPSources in agent-config.yaml if hosts can't reach DHCP-provided NTP."
+  firewall_ports:
+    - "TCP 6443 (Kubernetes API) -- from clients to API VIP"
+    - "TCP 443/80 (Ingress) -- from clients to Ingress VIP"
+    - "UDP 123 (NTP) -- if using external NTP servers"
+  vcenter_permissions_doc: https://docs.redhat.com/en/documentation/openshift_container_platform/4.20/html/installing_an_on-premise_cluster_with_the_agent-based_installer/preparing-to-install-with-agent-based-installer

@@ -1,0 +1,37 @@
+# Supplementary checklist content that applies to every vSphere install
+# method, appended after the per-method networking/DNS/LB section.
+#
+# Source: https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/installing_on_vmware_vsphere/installer-provisioned-infrastructure
+platform: vsphere
+doc_source: https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/installing_on_vmware_vsphere/installer-provisioned-infrastructure
+
+vcenter_privileges:
+  note: >
+    Red Hat tests IPI/UPI against the full privilege set below. Reducing
+    privileges after installation is not supported.
+  cluster:
+    - Host.Config.Storage
+    - Resource.AssignVMToPool
+    - VApp.*
+    - VirtualMachine.Config.AddNewDisk
+  datastore:
+    - Datastore.AllocateSpace
+    - Datastore.Browse
+    - Datastore.FileManagement
+    - "tagging privileges"
+  port_group:
+    - Network.Assign
+  vm_folder:
+    - "Full VM create/configure/power/provision/clone privileges"
+  vcenter_global:
+    - Cns.Searchable
+    - Sessions.ValidateSession
+    - StorageProfile.Update
+    - StorageProfile.View
+    - "tagging privileges"
+
+general_reminders:
+  - "Confirm VPN connectivity to the vCenter/Nutanix/cloud API before running any credentials or bastion commands -- ClusterBuild runs from your own machine/bastion, so it inherits whatever network access you already have."
+  - "disk.EnableUUID=TRUE is required on every VM for UPI/Agent-based installs (cluster-level default or per-VM)."
+  - "install-config.yaml and agent-config.yaml (if used) are automatically backed up to ~/.clusterbuild/backups/<cluster>/<timestamp>/ before install starts."
+  - "vSphere 8.0+ recommended for Agent-based/Assisted ISO boot flows per the Assisted Installer vSphere chapter."

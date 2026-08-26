@@ -1,0 +1,95 @@
+# GCP Installer-Provisioned Infrastructure (IPI)
+#
+# Source: https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/installing_on_google_cloud/installing-gcp-customizations
+platform: gcp
+install_method: ipi
+status: ga
+doc_source: https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/installing_on_google_cloud/installing-gcp-customizations
+description: >
+  Installer-provisioned infrastructure on Google Cloud: openshift-install
+  drives its own Terraform providers directly against the GCP API to create
+  the VPC network, load balancers, and bootstrap/control-plane/compute
+  Compute Engine instances. No custom driver is used here (contrast with
+  vSphere/Nutanix) -- the installer provisions everything itself once a
+  service-account key is staged on the bastion. DHCP/dynamic-IP only, per
+  the plan's static-IP restriction to vSphere/Nutanix.
+cli_binary: openshift-install
+manifests:
+  - filename: install-config.yaml
+    fields:
+      - path: apiVersion
+        value: v1
+        source: constant
+      - path: metadata.name
+        label: Cluster name
+        type: string
+        required: true
+        source: user_input
+        help: "DNS-safe cluster name; forms api.<name>.<baseDomain>."
+      - path: baseDomain
+        label: Base domain
+        type: string
+        required: true
+        source: user_input
+        help: "Must match an existing public Cloud DNS managed zone in projectID."
+      - path: pullSecret
+        label: Pull secret
+        type: secret
+        required: true
+        source: keyring
+        keyring_key: pull_secret
+      - path: sshKey
+        label: SSH public key
+        type: string
+        required: false
+        source: user_input
+      - path: controlPlane.name
+        value: master
+        source: constant
+      - path: controlPlane.replicas
+        label: Control plane node count
+        type: int
+        required: true
+        default: 3
+        source: user_input
+      - path: compute.name
+        value: worker
+        source: constant
+      - path: compute.replicas
+        label: Worker node count
+        type: int
+        required: true
+        default: 3
+        source: user_input
+      - path: platform.gcp.projectID
+        type: string
+        source: environment_profile
+        env_profile_key: project_id
+      - path: platform.gcp.region
+        type: string
+        source: environment_profile
+        env_profile_key: region
+
+networking:
+  vip_based: false
+  required_dns:
+    - record: "<base_domain> Cloud DNS public managed zone"
+      points_to: "N/A -- installer creates api/*.apps records in the existing managed zone in projectID"
+      scope: "external"
+  load_balancer:
+    required: false
+    note: "Not required from the user -- the installer creates its own GCP TCP/HTTP(S) Load Balancers for API and Ingress."
+  ntp:
+    required: false
+    note: "Compute Engine VMs sync via the Google NTP service by default."
+  firewall_ports:
+    - "TCP 6443 (Kubernetes API) -- installer-managed firewall rules"
+    - "TCP 443/80 (Ingress) -- installer-managed firewall rules"
+  credentials_doc: https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/installing_on_google_cloud/installing-gcp-customizations
+  credentials_note: >
+    `clusterbuild credentials set --platform gcp` stores a pasted
+    service-account JSON key in the OS keyring; ClusterBuild stages it into
+    ~/.gcp/osServiceAccount.json on the bastion immediately before running
+    `openshift-install create cluster` (never written into
+    install-config.yaml). The service account needs the roles listed in the
+    docs (e.g. Compute Admin, DNS Administrator, Service Account Admin).

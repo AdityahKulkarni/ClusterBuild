@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clusterbuild"
+version = "0.1.0"
+description = "Standalone CLI for automating OpenShift cluster installation from official Red Hat/OpenShift docs, for internal team testing."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Internal-Use-Only" }
+authors = [{ name = "ClusterBuild contributors" }]
+
+dependencies = [
+  "typer>=0.12",
+  "rich>=13.7",
+  "questionary>=2.0",
+  "ruamel.yaml>=0.18",
+  "PyYAML>=6.0",
+  "paramiko>=3.4",
+  "keyring>=25.0",
+  "hvac>=2.1",
+  "SQLAlchemy>=2.0",
+  "requests>=2.31",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-cov>=5.0"]
+build = ["build>=1.2", "pyinstaller>=6.10"]
+
+[project.scripts]
+clusterbuild = "clusterbuild.cli.main:app"
+
+[tool.setuptools.packages.find]
+include = ["clusterbuild*"]
+
+[tool.setuptools.package-data]
+clusterbuild = ["catalog/**/*.yaml", "environments/**/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,107 @@
+# Nutanix Installer-Provisioned Infrastructure (IPI)
+#
+# Source: https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/installing_on_nutanix/installing-on-nutanix-installer-provisioned
+platform: nutanix
+install_method: ipi
+status: ga
+doc_source: https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/installing_on_nutanix/installing-on-nutanix-installer-provisioned
+description: >
+  Installer-provisioned infrastructure on Nutanix: openshift-install talks
+  directly to Prism Central to provision the bootstrap/control-plane/compute
+  VMs. Like vSphere IPI, no external load balancer is required -- the
+  installer manages the API/Ingress VIPs itself.
+cli_binary: openshift-install
+manifests:
+  - filename: install-config.yaml
+    fields:
+      - path: apiVersion
+        value: v1
+        source: constant
+      - path: metadata.name
+        label: Cluster name
+        type: string
+        required: true
+        source: user_input
+      - path: baseDomain
+        label: Base domain
+        type: string
+        required: true
+        source: user_input
+      - path: pullSecret
+        label: Pull secret
+        type: secret
+        required: true
+        source: keyring
+        keyring_key: pull_secret
+      - path: sshKey
+        label: SSH public key
+        type: string
+        required: false
+        source: user_input
+      - path: controlPlane.name
+        value: master
+        source: constant
+      - path: controlPlane.replicas
+        label: Control plane node count
+        type: int
+        required: true
+        default: 3
+        source: user_input
+      - path: compute.name
+        value: worker
+        source: constant
+      - path: compute.replicas
+        label: Worker node count
+        type: int
+        required: true
+        default: 3
+        source: user_input
+      - path: networking.machineNetwork
+        type: list
+        source: environment_profile
+        env_profile_key: machine_network_cidr
+        transform: wrap_cidr_list
+      - path: platform.nutanix.prismCentral
+        type: object
+        source: environment_profile
+        env_profile_key: prism_central_block
+        credentials_from: keyring
+      - path: platform.nutanix.prismElements
+        type: list
+        source: environment_profile
+        env_profile_key: prism_elements_block
+      - path: platform.nutanix.subnetUUIDs
+        type: list
+        source: environment_profile
+        env_profile_key: subnet_uuids_block
+      - path: platform.nutanix.apiVIPs
+        label: API VIP(s)
+        type: list[ipv4]
+        required: true
+        source: user_input
+        validate: within_env_profile_cidr
+      - path: platform.nutanix.ingressVIPs
+        label: Ingress VIP(s)
+        type: list[ipv4]
+        required: true
+        source: user_input
+        validate: within_env_profile_cidr
+
+networking:
+  vip_based: true
+  required_dns:
+    - record: "api.<cluster_name>.<base_domain>"
+      points_to: apiVIP
+      scope: "external + internal"
+    - record: "*.apps.<cluster_name>.<base_domain>"
+      points_to: ingressVIP
+      scope: "external"
+  load_balancer:
+    required: false
+    note: "Not required -- the installer manages API/Ingress VIPs, same as vSphere IPI."
+  ntp:
+    required: true
+  firewall_ports:
+    - "TCP 6443 (Kubernetes API) -- from clients to API VIP"
+    - "TCP 443/80 (Ingress) -- from clients to Ingress VIP"
+    - "TCP 9440 -- ClusterBuild/openshift-install to Prism Central"

@@ -1,0 +1,37 @@
+# Environment Profile: Nutanix lab placeholder.
+#
+# Unlike environments/vsphere-pnq2.yaml, no real Nutanix lab details were
+# provided for this project -- fill in the values below (Prism Central
+# endpoint, Prism Element cluster UUID, subnet UUID, machine network CIDR)
+# for your own Nutanix environment before using `--platform nutanix`.
+# vCenter/vSphere-style credentials are NOT stored here -- see
+# `clusterbuild credentials set --platform nutanix`.
+id: nutanix-lab
+platform: nutanix
+description: "Template Nutanix environment profile -- replace every value below with your lab's real details."
+
+prism_central:
+  endpoint: prism-central.lab.example.com
+  port: 9440
+  verify_tls: false  # set true once you have a trusted TLS cert configured on Prism Central
+
+prism_element_cluster_uuid: "REPLACE-WITH-YOUR-PRISM-ELEMENT-CLUSTER-UUID"
+subnet_uuid: "REPLACE-WITH-YOUR-AHV-SUBNET-UUID"
+machine_network_cidr: "10.0.0.0/24"
+bastion_http_port: 8081
+architecture: x86_64
+
+derived_blocks:
+  prism_central_block:
+    endpoint:
+      address: prism-central.lab.example.com
+      port: 9440
+    username: "{{ keyring:nutanix.prism_central_username }}"
+    password: "{{ keyring:nutanix.prism_central_password }}"
+  prism_elements_block:
+    - endpoint:
+        address: prism-central.lab.example.com
+        port: 9440
+      uuid: "REPLACE-WITH-YOUR-PRISM-ELEMENT-CLUSTER-UUID"
+  subnet_uuids_block:
+    - "REPLACE-WITH-YOUR-AHV-SUBNET-UUID"

@@ -1,0 +1,13 @@
+# Environment Profile: AWS lab placeholder.
+#
+# No real AWS account details were provided for this project -- fill in the
+# values below for your own AWS account/region before using --platform aws.
+# AWS credentials themselves are NOT stored here -- see
+# `clusterbuild credentials set --platform aws` (access key/secret key,
+# staged onto the bastion's ~/.aws/credentials at install time).
+id: aws-lab
+platform: aws
+description: "Template AWS environment profile -- replace region with your account's real target region."
+
+region: "REPLACE-WITH-YOUR-AWS-REGION"  # e.g. us-east-2 -- must have an existing Route53 public hosted zone for baseDomain
+architecture: x86_64

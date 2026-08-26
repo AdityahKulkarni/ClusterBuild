@@ -1,0 +1,159 @@
+# Nutanix Agent-based Installer, with static-IP support via NMState.
+#
+# Source: https://docs.redhat.com/en/documentation/openshift_container_platform/4.20/html/installing_an_on-premise_cluster_with_the_agent-based_installer/preparing-to-install-with-agent-based-installer
+platform: nutanix
+install_method: agent
+status: ga
+doc_source: https://docs.redhat.com/en/documentation/openshift_container_platform/4.20/html/installing_an_on-premise_cluster_with_the_agent-based_installer/preparing-to-install-with-agent-based-installer
+description: >
+  Agent-based Installer targeting Nutanix: builds the discovery/install ISO
+  the same way as vSphere, registers it as a Prism Central ISO image, boots
+  one VM per host from it. Static IP configuration via agent-config.yaml is
+  identical to the vSphere entry -- NMState is platform-independent.
+cli_binary: openshift-install
+manifests:
+  - filename: install-config.yaml
+    fields:
+      - path: apiVersion
+        value: v1
+        source: constant
+      - path: metadata.name
+        label: Cluster name
+        type: string
+        required: true
+        source: user_input
+      - path: baseDomain
+        label: Base domain
+        type: string
+        required: true
+        source: user_input
+      - path: pullSecret
+        label: Pull secret
+        type: secret
+        required: true
+        source: keyring
+        keyring_key: pull_secret
+      - path: sshKey
+        label: SSH public key
+        type: string
+        required: false
+        source: user_input
+      - path: controlPlane.name
+        value: master
+        source: constant
+      - path: controlPlane.replicas
+        label: Control plane node count
+        type: int
+        required: true
+        default: 3
+        source: user_input
+      - path: compute.name
+        value: worker
+        source: constant
+      - path: compute.replicas
+        label: Worker node count
+        type: int
+        required: true
+        default: 2
+        source: user_input
+      - path: networking.machineNetwork
+        type: list
+        source: environment_profile
+        env_profile_key: machine_network_cidr
+        transform: wrap_cidr_list
+      - path: platform.nutanix.prismCentral
+        type: object
+        source: environment_profile
+        env_profile_key: prism_central_block
+        credentials_from: keyring
+      - path: platform.nutanix.prismElements
+        type: list
+        source: environment_profile
+        env_profile_key: prism_elements_block
+      - path: platform.nutanix.subnetUUIDs
+        type: list
+        source: environment_profile
+        env_profile_key: subnet_uuids_block
+      - path: platform.nutanix.apiVIPs
+        label: API VIP(s)
+        type: list[ipv4]
+        required: true
+        source: user_input
+        validate: within_env_profile_cidr
+      - path: platform.nutanix.ingressVIPs
+        label: Ingress VIP(s)
+        type: list[ipv4]
+        required: true
+        source: user_input
+        validate: within_env_profile_cidr
+
+  - filename: agent-config.yaml
+    fields:
+      - path: apiVersion
+        value: v1beta1
+        source: constant
+      - path: kind
+        value: AgentConfig
+        source: constant
+      - path: rendezvousIP
+        label: Rendezvous host IP
+        type: ipv4
+        required: true
+        source: user_input
+        validate: within_env_profile_cidr
+      - path: hosts
+        label: Per-host static network configuration
+        type: list[host]
+        required: true
+        source: user_input
+        item_schema:
+          - {field: hostname, type: string, required: true}
+          - {field: role, type: "enum[master,worker]", required: true}
+          - {field: interface_name, type: string, required: true, default: eth0}
+          - {field: mac_address, type: mac, required: true}
+          - {field: ip_address, type: ipv4, required: true, validate: within_env_profile_cidr}
+          - {field: prefix_length, type: int, required: true, default: 24}
+          - {field: gateway, type: ipv4, required: true}
+          - {field: dns_server, type: ipv4, required: true}
+        transform: hosts_to_nmstate
+      - path: additionalNTPSources
+        type: list
+        required: false
+        source: user_input
+
+provisioning:
+  steps:
+    - id: create_agent_iso
+      run: "openshift-install --dir <install_dir> agent create image"
+      produces: [agent.x86_64.iso]
+    - id: upload_iso
+      driver: nutanix
+      action: upload_iso_to_datastore
+      note: "Registers the ISO with Prism Central as an ISO_IMAGE via an HTTP URL served from the bastion."
+    - id: create_and_boot_vms
+      driver: nutanix
+      action: create_vm_from_iso
+      per_host: true
+    - id: wait_bootstrap_complete
+      run: "openshift-install --dir <install_dir> agent wait-for bootstrap-complete"
+    - id: wait_install_complete
+      run: "openshift-install --dir <install_dir> agent wait-for install-complete"
+
+networking:
+  vip_based: true
+  required_dns:
+    - record: "api.<cluster_name>.<base_domain>"
+      points_to: apiVIP
+      scope: "external + internal"
+    - record: "*.apps.<cluster_name>.<base_domain>"
+      points_to: ingressVIP
+      scope: "external"
+  load_balancer:
+    required: false
+  ntp:
+    required: true
+  firewall_ports:
+    - "TCP 6443 (Kubernetes API) -- from clients to API VIP"
+    - "TCP 443/80 (Ingress) -- from clients to Ingress VIP"
+    - "TCP 9440 -- ClusterBuild/openshift-install to Prism Central"
+    - "UDP 123 (NTP) -- if using external NTP servers"

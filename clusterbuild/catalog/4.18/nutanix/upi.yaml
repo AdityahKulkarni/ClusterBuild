@@ -1,0 +1,141 @@
+# Nutanix User-Provisioned Infrastructure (UPI)
+#
+# Source: https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/installing_on_nutanix/installing-nutanix-user-provisioned
+#         https://github.com/openshift/installer/tree/main/docs/user/nutanix
+platform: nutanix
+install_method: upi
+status: ga
+doc_source: https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/installing_on_nutanix/installing-nutanix-user-provisioned
+description: >
+  User-provisioned infrastructure on Nutanix: ClusterBuild generates
+  install-config.yaml and the ignition configs, then drives the Nutanix
+  Prism Central driver to create and boot the bootstrap/master/worker VMs.
+  Requires an external load balancer and the full DNS record set, same as
+  vSphere UPI. Ignition is delivered via AHV's cloud-init `user_data` field
+  (there is no vSphere-style guestinfo mechanism on AHV).
+cli_binary: openshift-install
+manifests:
+  - filename: install-config.yaml
+    fields:
+      - path: apiVersion
+        value: v1
+        source: constant
+      - path: metadata.name
+        label: Cluster name
+        type: string
+        required: true
+        source: user_input
+      - path: baseDomain
+        label: Base domain
+        type: string
+        required: true
+        source: user_input
+      - path: pullSecret
+        label: Pull secret
+        type: secret
+        required: true
+        source: keyring
+        keyring_key: pull_secret
+      - path: sshKey
+        label: SSH public key
+        type: string
+        required: false
+        source: user_input
+      - path: controlPlane.name
+        value: master
+        source: constant
+      - path: controlPlane.replicas
+        label: Control plane node count
+        type: int
+        required: true
+        default: 3
+        source: user_input
+      - path: compute.name
+        value: worker
+        source: constant
+      - path: compute.replicas
+        label: Worker node count
+        type: int
+        required: true
+        default: 3
+        source: user_input
+      - path: networking.machineNetwork
+        type: list
+        source: environment_profile
+        env_profile_key: machine_network_cidr
+        transform: wrap_cidr_list
+      - path: platform
+        value: {nutanix: {}}
+        source: constant
+        note: "Minimal nutanix platform stanza for UPI -- no VIPs; owned by the external load balancer."
+
+provisioning:
+  steps:
+    - id: create_ignition_configs
+      run: "openshift-install create ignition-configs --dir <install_dir>"
+      produces: [bootstrap.ign, master.ign, worker.ign, metadata.json]
+    - id: ensure_rhcos_image
+      driver: nutanix
+      action: import_image_as_template
+      note: "Downloads the qemu/qcow2.gz RHCOS artifact and registers it as a Prism Central image."
+    - id: clone_bootstrap_vm
+      driver: nutanix
+      action: clone_vm_from_template
+      ignition_delivery: "guest_customization.cloud_init.user_data (base64) -- small HTTP-pointer ignition, same technique as vSphere UPI"
+    - id: clone_master_vms
+      driver: nutanix
+      action: clone_vm_from_template
+      count_from: controlPlane.replicas
+    - id: clone_worker_vms
+      driver: nutanix
+      action: clone_vm_from_template
+      count_from: compute.replicas
+    - id: power_on_and_wait_bootstrap
+      run: "openshift-install wait-for bootstrap-complete --dir <install_dir> --log-level=info"
+    - id: remove_bootstrap_from_lb
+    - id: destroy_bootstrap_vm
+      driver: nutanix
+      action: destroy_vm
+    - id: wait_install_complete
+      run: "openshift-install wait-for install-complete --dir <install_dir> --log-level=info"
+
+networking:
+  vip_based: false
+  required_dns:
+    - record: "api.<cluster_name>.<base_domain>"
+      points_to: "API load balancer"
+      scope: "external + internal"
+    - record: "api-int.<cluster_name>.<base_domain>"
+      points_to: "API load balancer"
+      scope: "internal (nodes only)"
+    - record: "*.apps.<cluster_name>.<base_domain>"
+      points_to: "Ingress load balancer"
+      scope: "external"
+    - record: "bootstrap.<cluster_name>.<base_domain>"
+      points_to: "bootstrap node"
+      scope: "internal, plus PTR"
+    - record: "<node-hostname>.<cluster_name>.<base_domain>"
+      points_to: "each node"
+      scope: "internal, plus PTR, one per node"
+  load_balancer:
+    required: true
+    pools:
+      - port: 6443
+        backends: "bootstrap + control-plane nodes"
+        purpose: "Kubernetes API"
+      - port: 22623
+        backends: "bootstrap + control-plane nodes"
+        purpose: "Machine Config Server"
+      - port: 443
+        backends: "worker nodes"
+        purpose: "HTTPS ingress"
+      - port: 80
+        backends: "worker nodes"
+        purpose: "HTTP ingress"
+  ntp:
+    required: true
+  firewall_ports:
+    - "TCP 6443, 22623 -- to the external load balancer"
+    - "TCP 443, 80 -- to the external load balancer"
+    - "TCP 9440 -- ClusterBuild/openshift-install to Prism Central"
+    - "UDP 123 -- NTP, if external"

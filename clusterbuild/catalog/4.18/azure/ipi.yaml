@@ -1,0 +1,97 @@
+# Azure Installer-Provisioned Infrastructure (IPI)
+#
+# Source: https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/installing_on_azure/installer-provisioned-infrastructure
+#         https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/installing_on_azure/installation-config-parameters-azure
+platform: azure
+install_method: ipi
+status: ga
+doc_source: https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/installing_on_azure/installer-provisioned-infrastructure
+description: >
+  Installer-provisioned infrastructure on Azure: openshift-install drives
+  its own Terraform providers directly against the Azure Resource Manager
+  API to create the resource group, VNet, load balancers, and
+  bootstrap/control-plane/compute VMs. No custom driver is used here
+  (contrast with vSphere/Nutanix) -- the installer provisions everything
+  itself once a service principal is staged on the bastion. DHCP/dynamic-IP
+  only, per the plan's static-IP restriction to vSphere/Nutanix.
+cli_binary: openshift-install
+manifests:
+  - filename: install-config.yaml
+    fields:
+      - path: apiVersion
+        value: v1
+        source: constant
+      - path: metadata.name
+        label: Cluster name
+        type: string
+        required: true
+        source: user_input
+        help: "DNS-safe cluster name; forms api.<name>.<baseDomain>."
+      - path: baseDomain
+        label: Base domain
+        type: string
+        required: true
+        source: user_input
+        help: "Must match an existing Azure public DNS zone in baseDomainResourceGroupName."
+      - path: pullSecret
+        label: Pull secret
+        type: secret
+        required: true
+        source: keyring
+        keyring_key: pull_secret
+      - path: sshKey
+        label: SSH public key
+        type: string
+        required: false
+        source: user_input
+      - path: controlPlane.name
+        value: master
+        source: constant
+      - path: controlPlane.replicas
+        label: Control plane node count
+        type: int
+        required: true
+        default: 3
+        source: user_input
+      - path: compute.name
+        value: worker
+        source: constant
+      - path: compute.replicas
+        label: Worker node count
+        type: int
+        required: true
+        default: 3
+        source: user_input
+      - path: platform.azure.region
+        type: string
+        source: environment_profile
+        env_profile_key: region
+      - path: platform.azure.baseDomainResourceGroupName
+        type: string
+        source: environment_profile
+        env_profile_key: base_domain_resource_group_name
+
+networking:
+  vip_based: false
+  required_dns:
+    - record: "<base_domain> Azure public DNS zone"
+      points_to: "N/A -- installer creates api/*.apps records in the existing public DNS zone in baseDomainResourceGroupName"
+      scope: "external"
+  load_balancer:
+    required: false
+    note: "Not required from the user -- the installer creates its own Azure Standard Load Balancers for API and Ingress."
+  ntp:
+    required: false
+    note: "Azure VMs sync via the built-in Hyper-V time synchronization service by default."
+  firewall_ports:
+    - "TCP 6443 (Kubernetes API) -- installer-managed network security groups"
+    - "TCP 443/80 (Ingress) -- installer-managed network security groups"
+  credentials_doc: https://docs.redhat.com/en/documentation/openshift_container_platform/4.18/html/installing_on_azure/installer-provisioned-infrastructure
+  credentials_note: >
+    `clusterbuild credentials set --platform azure` stores a service
+    principal's clientId/clientSecret/tenantId/subscriptionId in the OS
+    keyring; ClusterBuild stages them into ~/.azure/osServicePrincipal.json
+    on the bastion immediately before running `openshift-install create
+    cluster` (never written into install-config.yaml). The service
+    principal needs Contributor + User Access Administrator roles on the
+    subscription per the docs.
