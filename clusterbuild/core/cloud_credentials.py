@@ -64,8 +64,7 @@ def stage(executor: BastionExecutor, platform: str, secrets: SecretsBackend) -> 
         executor.ensure_dir(f"{home}/.aws")
         executor.run(f"chmod 700 {shlex.quote(home + '/.aws')}")
         content = f"[default]\naws_access_key_id = {access_key}\naws_secret_access_key = {secret_key}\n"
-        executor.write_file(f"{home}/.aws/credentials", content)
-        executor.run(f"chmod 600 {shlex.quote(home + '/.aws/credentials')}")
+        executor.write_file(f"{home}/.aws/credentials", content)  # chmod'd 600 by write_file
 
     elif platform == "azure":
         client_id = secrets.get("azure", "client_id")
@@ -84,8 +83,7 @@ def stage(executor: BastionExecutor, platform: str, secrets: SecretsBackend) -> 
             "clientSecret": client_secret,
             "tenantId": tenant_id,
         }
-        executor.write_file(f"{home}/.azure/osServicePrincipal.json", json.dumps(payload))
-        executor.run(f"chmod 600 {shlex.quote(home + '/.azure/osServicePrincipal.json')}")
+        executor.write_file(f"{home}/.azure/osServicePrincipal.json", json.dumps(payload))  # chmod'd 600 by write_file
 
     elif platform == "gcp":
         service_account_json = secrets.get("gcp", "service_account_json")
@@ -95,5 +93,4 @@ def stage(executor: BastionExecutor, platform: str, secrets: SecretsBackend) -> 
             )
         executor.ensure_dir(f"{home}/.gcp")
         executor.run(f"chmod 700 {shlex.quote(home + '/.gcp')}")
-        executor.write_file(f"{home}/.gcp/osServiceAccount.json", service_account_json)
-        executor.run(f"chmod 600 {shlex.quote(home + '/.gcp/osServiceAccount.json')}")
+        executor.write_file(f"{home}/.gcp/osServiceAccount.json", service_account_json)  # chmod'd 600 by write_file

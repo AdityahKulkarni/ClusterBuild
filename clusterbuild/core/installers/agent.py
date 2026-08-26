@@ -13,6 +13,8 @@ the plan.
 
 from __future__ import annotations
 
+import shlex
+
 from clusterbuild.core.bastion_exec import BastionExecutor
 from clusterbuild.core.drivers import nutanix as nutanix_driver
 from clusterbuild.core.drivers import vsphere as vsphere_driver
@@ -58,7 +60,9 @@ def run(params: dict, job_dir) -> None:  # noqa: ARG001
         )
 
         set_cluster_status(cluster_id, "building-agent-iso")
-        exit_code = run_remote_streaming(executor, f"openshift-install --dir {remote_install_dir} agent create image")
+        exit_code = run_remote_streaming(
+            executor, f"openshift-install --dir {shlex.quote(remote_install_dir)} agent create image"
+        )
         if exit_code != 0:
             set_cluster_status(cluster_id, "failed")
             raise RuntimeError(f"agent create image exited with code {exit_code}")
@@ -67,14 +71,14 @@ def run(params: dict, job_dir) -> None:  # noqa: ARG001
 
         set_cluster_status(cluster_id, "installing")
         exit_code = run_remote_streaming(
-            executor, f"openshift-install --dir {remote_install_dir} agent wait-for bootstrap-complete"
+            executor, f"openshift-install --dir {shlex.quote(remote_install_dir)} agent wait-for bootstrap-complete"
         )
         if exit_code != 0:
             set_cluster_status(cluster_id, "failed")
             raise RuntimeError(f"agent wait-for bootstrap-complete exited with code {exit_code}")
 
         exit_code = run_remote_streaming(
-            executor, f"openshift-install --dir {remote_install_dir} agent wait-for install-complete"
+            executor, f"openshift-install --dir {shlex.quote(remote_install_dir)} agent wait-for install-complete"
         )
         if exit_code != 0:
             set_cluster_status(cluster_id, "failed")

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import json
+import shlex
 
 from clusterbuild.core.bastion_exec import BastionExecutor
 from clusterbuild.core.drivers import nutanix as nutanix_driver
@@ -75,7 +76,9 @@ def run(params: dict, job_dir) -> None:  # noqa: ARG001
         )
 
         set_cluster_status(cluster_id, "generating-ignition")
-        exit_code = run_remote_streaming(executor, f"openshift-install create ignition-configs --dir {remote_install_dir}")
+        exit_code = run_remote_streaming(
+            executor, f"openshift-install create ignition-configs --dir {shlex.quote(remote_install_dir)}"
+        )
         if exit_code != 0:
             set_cluster_status(cluster_id, "failed")
             raise RuntimeError(f"create ignition-configs exited with code {exit_code}")
@@ -121,7 +124,8 @@ def run(params: dict, job_dir) -> None:  # noqa: ARG001
 
         set_cluster_status(cluster_id, "waiting-for-bootstrap")
         exit_code = run_remote_streaming(
-            executor, f"openshift-install wait-for bootstrap-complete --dir {remote_install_dir} --log-level=info"
+            executor,
+            f"openshift-install wait-for bootstrap-complete --dir {shlex.quote(remote_install_dir)} --log-level=info",
         )
         if exit_code != 0:
             set_cluster_status(cluster_id, "failed")
@@ -133,10 +137,17 @@ def run(params: dict, job_dir) -> None:  # noqa: ARG001
         )
         driver.power_off(executor, profile, creds, vm_name=bootstrap_vm)
         driver.destroy_vm(executor, profile, creds, vm_name=bootstrap_vm)
+        # By this point every node has already fetched its ignition config
+        # (masters/workers get theirs via guestinfo at boot, not this HTTP
+        # server -- only the bootstrap node used it, and bootstrap-complete
+        # has now been confirmed), so the unauthenticated HTTP server is no
+        # longer needed. Stop it now to shrink the window it's reachable.
+        _stop_ignition_http_server(executor)
 
         set_cluster_status(cluster_id, "installing")
         exit_code = run_remote_streaming(
-            executor, f"openshift-install wait-for install-complete --dir {remote_install_dir} --log-level=info"
+            executor,
+            f"openshift-install wait-for install-complete --dir {shlex.quote(remote_install_dir)} --log-level=info",
         )
         if exit_code != 0:
             set_cluster_status(cluster_id, "failed")
@@ -172,11 +183,27 @@ def _read_and_b64(executor: BastionExecutor, remote_path: str) -> str:
     return base64.b64encode(raw).decode()
 
 
+def _stop_ignition_http_server(executor: BastionExecutor) -> None:
+    """Best-effort teardown of the ignition HTTP server started by
+    `_start_ignition_http_server` -- never raises, since a failure here
+    shouldn't fail an otherwise-successful install."""
+    try:
+        executor.run(f"pkill -f 'http.server {HTTP_SERVER_PORT}' || true", timeout=10)
+    except Exception:  # noqa: BLE001 -- best-effort cleanup only
+        pass
+
+
 def _start_ignition_http_server(executor: BastionExecutor, remote_install_dir: str) -> None:
     log(f"Starting HTTP server on the bastion to serve bootstrap.ign on port {HTTP_SERVER_PORT} ...")
+    # Quote remote_install_dir even though it's nested inside a single-quoted
+    # `sh -c '...'` string -- shlex.quote() emits a `'"'"'`-style escape for
+    # embedded single quotes, so a cluster name containing one can't break out
+    # of the outer quoting and inject additional shell commands.
     executor.run(
-        f"sh -c 'cd {remote_install_dir} && "
-        f"nohup python3 -m http.server {HTTP_SERVER_PORT} > http-server.log 2>&1 & disown'"
+        "sh -c " + shlex.quote(
+            f"cd {shlex.quote(remote_install_dir)} && "
+            f"nohup python3 -m http.server {HTTP_SERVER_PORT} > http-server.log 2>&1 & disown"
+        )
     )
 
 
@@ -194,7 +221,9 @@ def _ensure_rhcos_template(executor: BastionExecutor, driver, profile: dict, cre
 
     remote_image_path = f"{remote_install_dir}/rhcos-image"
     log(f"Downloading RHCOS disk image from {image_url} ...")
-    exit_code = run_remote_streaming(executor, f"curl -L -o {remote_image_path} {image_url}")
+    exit_code = run_remote_streaming(
+        executor, f"curl -L -o {shlex.quote(remote_image_path)} {shlex.quote(image_url)}"
+    )
     if exit_code != 0:
         raise RuntimeError("failed to download the RHCOS disk image onto the bastion")
 

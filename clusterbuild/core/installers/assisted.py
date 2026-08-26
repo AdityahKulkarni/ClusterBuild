@@ -186,7 +186,9 @@ def _provision_hosts(
     remote_iso_path = f"{remote_install_dir}/discovery.iso"
 
     log("Downloading discovery ISO to the bastion ...")
-    download = executor.run(f"curl -L -o {remote_iso_path} {shlex.quote(iso_url)}", timeout=600)
+    download = executor.run(
+        f"curl -L -o {shlex.quote(remote_iso_path)} {shlex.quote(iso_url)}", timeout=600
+    )
     if not download.ok:
         raise RuntimeError("failed to download the discovery ISO onto the bastion")
 

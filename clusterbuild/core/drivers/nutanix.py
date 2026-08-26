@@ -23,6 +23,7 @@ mechanism AHV uses in place of vSphere's guestinfo.
 
 from __future__ import annotations
 
+import shlex
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -63,7 +64,11 @@ class _PrismCentralClient:
         self.base_url = f"https://{endpoint}:{port}/api/nutanix/v3"
         self.session = requests.Session()
         self.session.auth = (creds.username, creds.password)
-        self.session.verify = profile["prism_central"].get("verify_tls", False)
+        # Basic Auth carries the Prism Central credentials on every request,
+        # so certificate verification defaults to *on*. Labs using Prism
+        # Central's self-signed default cert must opt in with an explicit
+        # `verify_tls: false` in their environment profile.
+        self.session.verify = profile["prism_central"].get("verify_tls", True)
 
     def post(self, path: str, payload: dict) -> dict:
         resp = self.session.post(f"{self.base_url}{path}", json=payload, timeout=REQUEST_TIMEOUT_SECONDS)
@@ -110,30 +115,74 @@ def _subnet_reference(profile: dict) -> dict:
 # -- image (ISO / disk) management, served via HTTP from the bastion --------
 
 
+def _resolve_bastion_http_port(profile: dict) -> int:
+    """Resolve+validate `bastion_http_port` as a plain TCP port number.
+
+    This value is interpolated into a remote shell command (see
+    `upload_iso_to_datastore`/`import_image_as_template`/
+    `_stop_bastion_http_server`) -- unlike path/name fields, it isn't run
+    through `shlex.quote()` there because a legitimate port is just digits.
+    Coercing to `int` and range-checking here is what actually prevents a
+    malicious or corrupted environment profile (e.g. a shared team profile
+    someone tampered with) from injecting shell commands via this field.
+    """
+    raw = profile.get("bastion_http_port", 8081)
+    try:
+        port = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise NutanixDriverError(f"bastion_http_port must be an integer, got {raw!r}") from exc
+    if not (1 <= port <= 65535):
+        raise NutanixDriverError(f"bastion_http_port must be between 1 and 65535, got {port}")
+    return port
+
+
+def _stop_bastion_http_server(executor, http_port: int) -> None:
+    """Best-effort teardown of the temporary, unauthenticated HTTP server
+    used to hand Prism Central an image URL -- never raises, since Prism
+    Central has already fetched the image by the time this runs."""
+    try:
+        executor.run(f"pkill -f 'http.server {http_port}' || true", timeout=10)
+    except Exception:  # noqa: BLE001 -- best-effort cleanup only
+        pass
+
+
 def upload_iso_to_datastore(executor, profile: dict, creds: NutanixCredentials, *, local_iso_path: str, remote_iso_name: str) -> None:
     """Registers the ISO already sitting on the bastion as a Prism Central
     image, by pointing Prism Central at an HTTP URL served from the bastion
     itself -- avoids a separate multi-GB binary upload flow."""
-    http_port = profile.get("bastion_http_port", 8081)
+    http_port = _resolve_bastion_http_port(profile)
+    remote_dir = local_iso_path.rsplit("/", 1)[0]
+    # remote_dir derives from remote_install_dir, which embeds the
+    # user-supplied cluster name -- shlex.quote() both the directory (for the
+    # inner `cd`) and the whole inner command (for the outer `sh -c`) so a
+    # shell metacharacter or embedded single quote can't break out.
     executor.run(
-        f"sh -c 'cd {local_iso_path.rsplit('/', 1)[0]} && "
-        f"nohup python3 -m http.server {http_port} > http-server-nutanix.log 2>&1 & disown'"
+        "sh -c " + shlex.quote(
+            f"cd {shlex.quote(remote_dir)} && "
+            f"nohup python3 -m http.server {http_port} > http-server-nutanix.log 2>&1 & disown"
+        )
     )
     filename = local_iso_path.rsplit("/", 1)[-1]
     source_uri = f"http://{executor.host}:{http_port}/{filename}"
     client = _client(profile, creds)
-    response = client.post(
-        "/images",
-        {
-            "metadata": {"kind": "image"},
-            "spec": {
-                "name": remote_iso_name.replace("/", "_"),
-                "resources": {"image_type": "ISO_IMAGE", "source_uri": source_uri},
+    try:
+        response = client.post(
+            "/images",
+            {
+                "metadata": {"kind": "image"},
+                "spec": {
+                    "name": remote_iso_name.replace("/", "_"),
+                    "resources": {"image_type": "ISO_IMAGE", "source_uri": source_uri},
+                },
             },
-        },
-    )
-    task_uuid = response["status"]["execution_context"]["task_uuid"]
-    client.wait_task(task_uuid)
+        )
+        task_uuid = response["status"]["execution_context"]["task_uuid"]
+        client.wait_task(task_uuid)
+    finally:
+        # Stop the server even if the Prism Central image registration
+        # itself fails -- it should never be left running just because the
+        # API call errored out.
+        _stop_bastion_http_server(executor, http_port)
 
 
 def create_vm_from_iso(
@@ -199,23 +248,29 @@ def template_exists(executor, profile: dict, creds: NutanixCredentials, *, templ
 
 
 def import_image_as_template(executor, profile: dict, creds: NutanixCredentials, *, remote_image_path: str, template_name: str) -> None:
-    http_port = profile.get("bastion_http_port", 8081)
+    http_port = _resolve_bastion_http_port(profile)
+    remote_dir = remote_image_path.rsplit("/", 1)[0]
     executor.run(
-        f"sh -c 'cd {remote_image_path.rsplit('/', 1)[0]} && "
-        f"nohup python3 -m http.server {http_port} > http-server-nutanix.log 2>&1 & disown'"
+        "sh -c " + shlex.quote(
+            f"cd {shlex.quote(remote_dir)} && "
+            f"nohup python3 -m http.server {http_port} > http-server-nutanix.log 2>&1 & disown"
+        )
     )
     filename = remote_image_path.rsplit("/", 1)[-1]
     source_uri = f"http://{executor.host}:{http_port}/{filename}"
     client = _client(profile, creds)
-    response = client.post(
-        "/images",
-        {
-            "metadata": {"kind": "image"},
-            "spec": {"name": template_name, "resources": {"image_type": "DISK_IMAGE", "source_uri": source_uri}},
-        },
-    )
-    task_uuid = response["status"]["execution_context"]["task_uuid"]
-    client.wait_task(task_uuid)
+    try:
+        response = client.post(
+            "/images",
+            {
+                "metadata": {"kind": "image"},
+                "spec": {"name": template_name, "resources": {"image_type": "DISK_IMAGE", "source_uri": source_uri}},
+            },
+        )
+        task_uuid = response["status"]["execution_context"]["task_uuid"]
+        client.wait_task(task_uuid)
+    finally:
+        _stop_bastion_http_server(executor, http_port)
 
 
 def clone_vm_from_template(executor, profile: dict, creds: NutanixCredentials, *, template_name: str, vm_name: str) -> None:

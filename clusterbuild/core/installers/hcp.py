@@ -20,6 +20,7 @@ method are:
 
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 
 from clusterbuild.core.bastion_exec import BastionExecutor
@@ -93,21 +94,27 @@ def run(params: dict, job_dir) -> None:  # noqa: ARG001
         set_cluster_status(cluster_id, "installing")
 
         node_pool_replicas = int(answers.get("nodePoolReplicas", 2))
-        memory = answers.get("memory", "8Gi")
+        memory = str(answers.get("memory", "8Gi"))
         cores = int(answers.get("cores", 2))
-        etcd_storage_class = answers["etcdStorageClass"]
-        wait_timeout = answers.get("waitTimeout", "45m")
+        etcd_storage_class = str(answers["etcdStorageClass"])
+        wait_timeout = str(answers.get("waitTimeout", "45m"))
 
+        # All of these are free-text wizard answers (or the user-supplied
+        # cluster name) -- shlex.quote() everything before it lands in a
+        # command string run on the bastion, so a stray shell metacharacter
+        # (e.g. in a typo'd "memory" or "etcd storage class" answer) can't be
+        # interpreted by the remote shell.
         command = (
-            f"KUBECONFIG={remote_kubeconfig} hcp create cluster kubevirt "
-            f"--name {cluster_name} --namespace {hcp_namespace} "
-            f"--node-pool-replicas {node_pool_replicas} --pull-secret {remote_pull_secret} "
-            f"--memory {memory} --cores {cores} --etcd-storage-class={etcd_storage_class} "
-            f"--wait --timeout {wait_timeout}"
+            f"KUBECONFIG={shlex.quote(remote_kubeconfig)} hcp create cluster kubevirt "
+            f"--name {shlex.quote(cluster_name)} --namespace {shlex.quote(hcp_namespace)} "
+            f"--node-pool-replicas {node_pool_replicas} --pull-secret {shlex.quote(remote_pull_secret)} "
+            f"--memory {shlex.quote(memory)} --cores {cores} "
+            f"--etcd-storage-class={shlex.quote(etcd_storage_class)} "
+            f"--wait --timeout {shlex.quote(wait_timeout)}"
         )
         release_image = answers.get("releaseImage")
         if release_image:
-            command += f" --release-image {release_image}"
+            command += f" --release-image {shlex.quote(str(release_image))}"
 
         exit_code = run_remote_streaming(executor, command)
         if exit_code != 0:
@@ -116,7 +123,8 @@ def run(params: dict, job_dir) -> None:  # noqa: ARG001
 
         log("Hosted cluster ready. Retrieving kubeconfig ...")
         kubeconfig_result = executor.run(
-            f"KUBECONFIG={remote_kubeconfig} hcp create kubeconfig --name {cluster_name} --namespace {hcp_namespace}",
+            f"KUBECONFIG={shlex.quote(remote_kubeconfig)} hcp create kubeconfig "
+            f"--name {shlex.quote(cluster_name)} --namespace {shlex.quote(hcp_namespace)}",
             timeout=60,
         )
         if not kubeconfig_result.ok:

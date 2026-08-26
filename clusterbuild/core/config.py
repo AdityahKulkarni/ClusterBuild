@@ -42,7 +42,13 @@ class Paths:
 
     def ensure(self) -> "Paths":
         for d in (self.home, self.jobs_dir, self.backups_dir, self.logs_dir, self.environments_dir):
-            d.mkdir(parents=True, exist_ok=True)
+            # Passing mode= to mkdir() sets it atomically at creation time
+            # (subject to umask), closing the brief window a separate,
+            # subsequent chmod() would otherwise leave; the explicit
+            # _chmod_owner_only() call below still runs afterwards as a
+            # defense-in-depth backstop (e.g. for dirs that already existed
+            # with looser permissions from a previous run).
+            d.mkdir(parents=True, exist_ok=True, mode=0o700)
             _chmod_owner_only(d, is_dir=True)
         return self
 
@@ -95,7 +101,7 @@ def user_environments_dir() -> Path:
 
 def job_dir(job_id: str) -> Path:
     d = get_paths().jobs_dir / job_id
-    d.mkdir(parents=True, exist_ok=True)
+    d.mkdir(parents=True, exist_ok=True, mode=0o700)
     _chmod_owner_only(d, is_dir=True)
     return d
 
@@ -105,7 +111,7 @@ def backup_path_for(cluster_name: str, filename: str, timestamp: str) -> Path:
     # so create all the way down to its parent, not just the timestamp dir.
     base = get_paths().backups_dir / cluster_name / timestamp
     target = base / filename
-    target.parent.mkdir(parents=True, exist_ok=True)
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     _chmod_owner_only(base, is_dir=True)
     _chmod_owner_only(target.parent, is_dir=True)
     return target

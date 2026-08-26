@@ -218,6 +218,79 @@ def test_upi_install_none_platform_omits_vsphere_manifest_block(_fake_env):
     assert _fake_env["cloned"].count("upi-test1-worker-1") == 1
 
 
+def test_upi_quotes_cluster_name_in_remote_commands_and_stops_http_server(_fake_env):
+    """Security-pass regression: `remote_install_dir` (which embeds the
+    user-supplied cluster name) must be shlex-quoted everywhere it lands in a
+    command run on the bastion, and the ignition HTTP server must be stopped
+    once bootstrap is torn down."""
+    bastion_id, cluster_id = _seed("vsphere")
+    params = _base_params("vsphere", bastion_id, cluster_id)
+
+    upi.run(params, job_dir=None)
+
+    executor = FakeBastionExecutor.instances[-1]
+    install_dir = "/home/qe/clusterbuild-installs/upi-test1"
+
+    ignition_cmd = next(c for c in executor.commands_run if "create ignition-configs" in c)
+    assert f"--dir {install_dir}" in ignition_cmd
+
+    bootstrap_wait_cmd = next(c for c in executor.commands_run if "wait-for bootstrap-complete" in c)
+    assert f"--dir {install_dir}" in bootstrap_wait_cmd
+
+    install_wait_cmd = next(c for c in executor.commands_run if "wait-for install-complete" in c)
+    assert f"--dir {install_dir}" in install_wait_cmd
+
+    assert any("pkill" in c and "http.server 8080" in c for c in executor.commands_run)
+
+
+def test_upi_quotes_shell_metacharacters_in_cluster_name(_fake_env):
+    """Security-pass regression: a cluster name containing shell
+    metacharacters (an easy typo, or a malicious/corrupted value) must never
+    let commands run on the bastion break out of their intended argument --
+    every `--dir` value must be the properly shlex-quoted install dir, never
+    the bare/unquoted name."""
+    import shlex
+
+    session = get_session()
+    try:
+        bastion = Bastion(host="bastion.lab", ssh_user="qe", install_dir="/home/qe/clusterbuild-installs")
+        session.add(bastion)
+        session.commit()
+        cluster = Cluster(
+            name="evil-cluster",
+            base_domain="lab.example.com",
+            ocp_version="4.18",
+            install_config_platform="vsphere",
+            infra_provisioning_target="vsphere",
+            install_method="upi",
+            bastion_id=bastion.id,
+            status="created",
+        )
+        session.add(cluster)
+        session.commit()
+        bastion_id, cluster_id = bastion.id, cluster.id
+    finally:
+        session.close()
+
+    malicious_name = "evil'; touch /tmp/pwned; echo '"
+    params = _base_params("vsphere", bastion_id, cluster_id)
+    params["cluster_name"] = malicious_name
+    params["answers"]["metadata.name"] = malicious_name
+
+    upi.run(params, job_dir=None)
+
+    executor = FakeBastionExecutor.instances[-1]
+    install_dir = f"/home/qe/clusterbuild-installs/{malicious_name}"
+    quoted_install_dir = shlex.quote(install_dir)
+
+    dir_commands = [c for c in executor.commands_run if "--dir" in c]
+    assert dir_commands, "expected at least one command with --dir"
+    for cmd in dir_commands:
+        # Proof the malicious segment is confined inside a single, properly
+        # shlex-quoted --dir argument rather than able to terminate it early.
+        assert f"--dir {quoted_install_dir}" in cmd
+
+
 def test_upi_preflight_failure_aborts_before_any_vm_is_created(_fake_env, monkeypatch):
     bastion_id, cluster_id = _seed("vsphere")
     params = _base_params("vsphere", bastion_id, cluster_id)

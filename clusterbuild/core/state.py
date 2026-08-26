@@ -8,6 +8,7 @@ purely as a lightweight local ORM -- there is no database server.
 from __future__ import annotations
 
 import datetime as dt
+from pathlib import Path
 from typing import Optional
 
 from sqlalchemy import (
@@ -116,6 +117,15 @@ def _get_engine():
     if engine is None:
         engine = create_engine(f"sqlite:///{db_path}", future=True)
         Base.metadata.create_all(engine)
+        # Defense-in-depth: state.db tracks bastion hostnames/install
+        # directories/backup paths -- lock it to owner-only even though the
+        # parent ~/.clusterbuild directory is already 0700, in case that
+        # directory's mode is ever loosened later (e.g. copied to a shared
+        # mount for debugging).
+        try:
+            Path(db_path).chmod(0o600)
+        except OSError:
+            pass
         _engine_cache[db_path] = engine
     return engine
 

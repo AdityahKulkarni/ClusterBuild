@@ -13,6 +13,8 @@ credentials are already embedded in install-config.yaml by manifest_builder.
 
 from __future__ import annotations
 
+import shlex
+
 from clusterbuild.core import cloud_credentials
 from clusterbuild.core.bastion_exec import BastionExecutor
 from clusterbuild.core.installers.base import (
@@ -54,9 +56,12 @@ def run(params: dict, job_dir) -> None:  # noqa: ARG001 -- job_dir unused, kept 
             cloud_credentials.stage(executor, entry.platform, SecretsBackend())
 
         set_cluster_status(cluster_id, "installing")
+        # remote_install_dir embeds the user-supplied cluster name -- quote it
+        # so a stray shell metacharacter in a cluster-name typo can't be
+        # interpreted by the bastion's shell.
         exit_code = run_remote_streaming(
             executor,
-            f"openshift-install create cluster --dir {remote_install_dir} --log-level=info",
+            f"openshift-install create cluster --dir {shlex.quote(remote_install_dir)} --log-level=info",
         )
         if exit_code != 0:
             set_cluster_status(cluster_id, "failed")

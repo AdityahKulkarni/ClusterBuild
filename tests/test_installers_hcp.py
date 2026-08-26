@@ -214,6 +214,49 @@ def test_hcp_handler_marks_failed_on_nonzero_exit(_fake_env, tmp_path, monkeypat
         session.close()
 
 
+def test_hcp_handler_quotes_shell_metacharacters_in_answers(_fake_env, tmp_path):
+    """Security-pass regression: free-text wizard answers (memory/etcd storage
+    class/wait timeout) must be shlex-quoted before landing in the `hcp`
+    command run on the bastion, so a stray shell metacharacter in a typo
+    can't be interpreted as a second command."""
+    mgmt_kubeconfig = tmp_path / "mgmt-kubeconfig"
+    mgmt_kubeconfig.write_text("apiVersion: v1\nkind: Config\n")
+    bastion_id, cluster_id = _seed_bastion_and_cluster(mgmt_kubeconfig)
+
+    params = {
+        "cluster_id": cluster_id,
+        "cluster_name": "hcp-test1",
+        "bastion_id": bastion_id,
+        "platform": "kubevirt",
+        "install_method": "hcp",
+        "ocp_version": "4.18",
+        "environment_profile": None,
+        "management_cluster_name": "mgmt-cluster",
+        "management_cluster_kubeconfig_local_path": str(mgmt_kubeconfig),
+        "answers": {
+            "metadata.name": "hcp-test1",
+            "namespace": "clusters; rm -rf /",
+            "nodePoolReplicas": 2,
+            "memory": "8Gi; touch /tmp/pwned",
+            "cores": 2,
+            "etcdStorageClass": "lvm-immediate",
+            "waitTimeout": "45m",
+        },
+    }
+
+    hcp.run(params, job_dir=None)
+
+    executor = FakeBastionExecutor.instances[-1]
+    create_cmd = next(c for c in executor.commands_run if "hcp create cluster kubevirt" in c)
+    # The malicious segments must appear only inside single-quoted shell
+    # tokens (shlex.quote()'s escaping), never as bare/unquoted text that a
+    # shell would parse as a second command.
+    assert "--namespace 'clusters; rm -rf /'" in create_cmd
+    assert "--memory '8Gi; touch /tmp/pwned'" in create_cmd
+    assert "--namespace clusters; rm -rf /" not in create_cmd
+    assert "--memory 8Gi; touch /tmp/pwned" not in create_cmd
+
+
 def test_hcp_handler_raises_when_pull_secret_missing(_fake_env, tmp_path, monkeypatch):
     class _EmptySecrets:
         def get(self, namespace, key, *, backend="keyring"):

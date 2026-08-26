@@ -135,12 +135,21 @@ class BastionExecutor:
         if not result.ok:
             raise BastionError(f"could not create {remote_path} on bastion: {result.stderr}")
 
-    def write_file(self, remote_path: str, content: str) -> None:
+    def write_file(self, remote_path: str, content: str, mode: int = 0o600) -> None:
+        """Write `content` to `remote_path` on the bastion.
+
+        Manifests, kubeconfigs, and pull secrets written through this path
+        carry plaintext credentials, so the remote file is chmod'd to
+        owner-only (`0600` by default) immediately after writing, closing the
+        window where the SFTP server's default create mode would otherwise
+        leave it group/world-readable on a shared bastion.
+        """
         client = self._require_client()
         sftp = client.open_sftp()
         try:
             with sftp.open(remote_path, "w") as fh:
                 fh.write(content)
+            sftp.chmod(remote_path, mode)
         finally:
             sftp.close()
 
@@ -162,11 +171,15 @@ class BastionExecutor:
         finally:
             sftp.close()
 
-    def upload_from_local(self, local_path: Path, remote_path: str) -> None:
+    def upload_from_local(self, local_path: Path, remote_path: str, mode: int = 0o600) -> None:
+        """Upload `local_path` to `remote_path`, chmod'd owner-only (`0600` by
+        default) immediately after transfer -- this path is used for
+        kubeconfigs and other credential-bearing files (see `write_file`)."""
         client = self._require_client()
         sftp = client.open_sftp()
         try:
             sftp.put(str(local_path), remote_path)
+            sftp.chmod(remote_path, mode)
         finally:
             sftp.close()
 
@@ -179,5 +192,9 @@ class BastionExecutor:
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         local_path = backup_path_for(cluster_name, filename, timestamp)
         local_path.write_text(content, encoding="utf-8")
+        try:
+            local_path.chmod(0o600)
+        except OSError:
+            pass
         checksum = hashlib.sha256(content.encode()).hexdigest()
         return local_path, checksum
