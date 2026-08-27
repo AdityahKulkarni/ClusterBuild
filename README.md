@@ -36,47 +36,81 @@ doc-sourced YAML **Catalog** (`clusterbuild/catalog/`) -- see
 
 ## Install
 
-### Option A: `pipx` (recommended for most team members)
+### Recommended: one-line installer
+
+No Python environment needed. This downloads the prebuilt single-file
+`clusterbuild` binary for your OS/arch from the
+[latest GitHub Release](https://github.com/AdityahKulkarni/ClusterBuild/releases),
+verifies its checksum, and puts it on your `PATH`:
 
 ```bash
-pipx install "git+https://github.com/<your-org>/clusterbuild.git"
-# ... or, once published: pipx install clusterbuild --index-url <internal-pypi>
+curl -fsSL https://raw.githubusercontent.com/AdityahKulkarni/ClusterBuild/main/scripts/install.sh | bash
+```
 
+Then:
+
+```bash
+clusterbuild version
+clusterbuild doctor run
+```
+
+Supports Linux and macOS, on x86_64 and arm64. To upgrade, just re-run the
+same command -- it always fetches the latest release (or pass
+`CLUSTERBUILD_VERSION=v0.2.0` to pin a specific one). See
+[`scripts/install.sh`](scripts/install.sh) for what it does and its other env
+vars (`CLUSTERBUILD_INSTALL_DIR`, `CLUSTERBUILD_BASE_URL` for an internal
+mirror) before piping it into `bash`, as with any installer script.
+
+<details>
+<summary>Other ways to install (pipx, editable/dev)</summary>
+
+**`pipx`, from source (no release binary required):**
+
+```bash
+pipx install "git+https://github.com/AdityahKulkarni/ClusterBuild.git"
 clusterbuild version
 ```
 
-Upgrading later:
+Upgrade with `pipx upgrade clusterbuild`.
+
+**Editable install for development:**
 
 ```bash
-pipx upgrade clusterbuild
-```
-
-### Option B: single-file binary (no Python required)
-
-If a team member's bastion-adjacent workstation shouldn't need a managed
-Python environment, build a single-file binary with PyInstaller and hand it
-out directly:
-
-```bash
-git clone <this-repo> && cd clusterbuild
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[build]"
-./scripts/build_binary.sh
-# -> dist/clusterbuild (single file)
-```
-
-Copy `dist/clusterbuild` anywhere on the target machine's `PATH` (e.g.
-`/usr/local/bin/clusterbuild`) -- no interpreter, no `pip install` needed on
-that machine. Rebuild and redistribute the same way for updates.
-
-### Option C: editable install for development
-
-```bash
-git clone <this-repo> && cd clusterbuild
+git clone https://github.com/AdityahKulkarni/ClusterBuild.git && cd ClusterBuild
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 pytest -q
 ```
+
+</details>
+
+### Releasing a new version (maintainers)
+
+The one-line installer expects a GitHub Release tagged `vX.Y.Z` with one
+binary + checksum pair per supported OS/arch, named exactly
+`clusterbuild-<os>-<arch>` / `clusterbuild-<os>-<arch>.sha256` (`os` is
+`linux`/`darwin`, `arch` is `x86_64`/`arm64`). PyInstaller can't cross-compile,
+so build once per platform (e.g. on a Linux x86_64 box and a macOS box you
+have access to):
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[build]"
+./scripts/build_binary.sh
+# -> dist/clusterbuild-<os>-<arch> and dist/clusterbuild-<os>-<arch>.sha256
+```
+
+Then, once you have all the platform assets you intend to ship gathered in
+one place:
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0
+gh release create v0.2.0 dist/clusterbuild-*-* --title v0.2.0 --generate-notes
+```
+
+(`gh release create` accepts multiple assets in one call -- repeat the build
+step on each platform first and collect every `dist/clusterbuild-*` file
+before running it.)
 
 ## Quickstart
 
@@ -173,7 +207,8 @@ clusterbuild/
     secrets.py             OS keyring / optional Vault credential storage
     state.py                local SQLite models (bastions, clusters, jobs, audit log)
 scripts/
-  build_binary.sh     PyInstaller single-file build (see "Option B" above)
+  install.sh          one-line installer (see "Install" above)
+  build_binary.sh     PyInstaller single-file build (see "Releasing a new version" above)
 tests/
 ```
 

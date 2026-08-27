@@ -6,12 +6,14 @@ import json
 from datetime import datetime, timezone
 from typing import Optional
 
+import questionary
 import typer
 from rich.console import Console
 from rich.table import Table
 
 from clusterbuild.core import audit
 from clusterbuild.core.bastion_exec import REQUIRED_TOOLS, BastionError, BastionExecutor
+from clusterbuild.core.secrets import SecretsBackend, delete_bastion_password, get_bastion_password, set_bastion_password
 from clusterbuild.core.state import Bastion, get_session
 
 app = typer.Typer(help="Register and verify RHEL bastions used as install hosts.")
@@ -26,11 +28,42 @@ def register(
     port: int = typer.Option(22, "--port"),
     key_filename: Optional[str] = typer.Option(None, "--key-file", help="Path to SSH private key (default: ssh-agent/default keys)"),
     install_dir: Optional[str] = typer.Option(None, "--install-dir", help="Base install directory on the bastion"),
+    password: Optional[str] = typer.Option(
+        None,
+        "--password",
+        help=(
+            "SSH password, used as a fallback when key/agent auth doesn't work and stored in the "
+            "OS keyring so it's also available to later commands and background install jobs. "
+            "Visible in shell history/process list -- prefer --ask-password when running interactively."
+        ),
+    ),
+    ask_password: bool = typer.Option(
+        False,
+        "--ask-password",
+        help="Prompt securely (hidden input) for the SSH password instead of --password.",
+    ),
+    clear_password: bool = typer.Option(
+        False,
+        "--clear-password",
+        help="Remove any previously stored SSH password for this bastion (falls back to key/agent auth only).",
+    ),
 ) -> None:
     """Register a bastion and verify SSH connectivity + required tooling."""
+    if password and ask_password:
+        err_console.print("[bold red]Use only one of --password / --ask-password.[/bold red]")
+        raise typer.Exit(code=1)
+
+    secrets = SecretsBackend()
+    if clear_password:
+        delete_bastion_password(secrets, host)
+
+    resolved_password = questionary.password(f"SSH password for {user}@{host}:").ask() if ask_password else password
+    if resolved_password:
+        set_bastion_password(secrets, host, resolved_password)
+
     executor = BastionExecutor(host, user, port=port, key_filename=key_filename)
     try:
-        executor.connect()
+        executor.connect(password=get_bastion_password(secrets, host))
     except BastionError as exc:
         err_console.print(f"[bold red]Could not connect:[/bold red] {exc}")
         raise typer.Exit(code=1) from exc
@@ -79,6 +112,10 @@ def register(
         )
     else:
         console.print(f"\n[green]Bastion {host} registered -- all required tools present.[/green]")
+    if resolved_password:
+        console.print(f"[green]SSH password for {host} stored in the OS keyring.[/green]")
+    if clear_password:
+        console.print(f"[green]Cleared any stored SSH password for {host}.[/green]")
 
 
 @app.command("list")
@@ -113,7 +150,7 @@ def verify(host: str = typer.Option(..., "--host")) -> None:
 
     executor = BastionExecutor(bastion.host, bastion.ssh_user, port=bastion.ssh_port)
     try:
-        executor.connect()
+        executor.connect(password=get_bastion_password(SecretsBackend(), bastion.host))
         verified = executor.verify_tools()
     except BastionError as exc:
         err_console.print(f"[bold red]Could not connect:[/bold red] {exc}")

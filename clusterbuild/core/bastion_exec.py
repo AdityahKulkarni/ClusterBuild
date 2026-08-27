@@ -74,6 +74,17 @@ class BastionExecutor:
                 password=password,
                 timeout=15,
             )
+        except paramiko.AuthenticationException as exc:
+            hint = (
+                "no SSH key/agent auth succeeded and no password was supplied"
+                if password is None
+                else "neither SSH key/agent auth nor the supplied password were accepted"
+            )
+            raise BastionError(
+                f"SSH authentication to {self.user}@{self.host}:{self.port} failed ({hint}). "
+                "Use `clusterbuild bastion register --password`/`--ask-password` to store an SSH "
+                "password for this bastion (used as a fallback when key/agent auth doesn't work)."
+            ) from exc
         except paramiko.SSHException as exc:
             raise BastionError(
                 f"SSH connection to {self.user}@{self.host}:{self.port} failed: {exc}. "

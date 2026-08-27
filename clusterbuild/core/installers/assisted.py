@@ -32,7 +32,7 @@ from clusterbuild.core.installers.base import (
 )
 from clusterbuild.core.jobs import register_job_handler
 from clusterbuild.core.manifest_builder import build_manifests
-from clusterbuild.core.secrets import SecretsBackend
+from clusterbuild.core.secrets import SecretsBackend, get_bastion_password
 
 SELF_HOSTED_PORT = 8090
 
@@ -66,7 +66,7 @@ def run(params: dict, job_dir) -> None:  # noqa: ARG001
     )
 
     executor = BastionExecutor(bastion.host, bastion.ssh_user, port=bastion.ssh_port)
-    executor.connect()
+    executor.connect(password=get_bastion_password(secrets, bastion.host))
     try:
         if backend == "self_hosted":
             client = _ensure_self_hosted_service(executor, bastion.host)

@@ -39,6 +39,7 @@ class FakeBastionExecutor:
     def __init__(self, host, user, port=22, key_filename=None):
         self.host, self.user, self.port = host, user, port
         self.connected = False
+        self.connect_password = None
         self.dirs_ensured: list[str] = []
         self.written_files: dict[str, str] = {}
         self.commands_run: list[str] = []
@@ -47,6 +48,7 @@ class FakeBastionExecutor:
 
     def connect(self, password=None):
         self.connected = True
+        self.connect_password = password
 
     def close(self):
         self.connected = False
@@ -73,6 +75,7 @@ def _fake_env(tmp_path, monkeypatch):
     monkeypatch.setenv("CLUSTERBUILD_HOME", str(tmp_path))
     monkeypatch.setattr(ipi, "BastionExecutor", FakeBastionExecutor)
     monkeypatch.setattr("clusterbuild.core.installers.base.SecretsBackend", _FakeSecretsBackend)
+    monkeypatch.setattr(ipi, "SecretsBackend", _FakeSecretsBackend)
     FakeBastionExecutor.instances.clear()
 
 
@@ -138,6 +141,43 @@ def test_ipi_handler_stages_manifests_and_runs_install(_fake_env):
         assert cluster.status == "installed"
     finally:
         session.close()
+
+
+def test_ipi_handler_threads_stored_bastion_password_into_connect(_fake_env, monkeypatch):
+    """Security-pass follow-up: a password stored via
+    `clusterbuild bastion register --password`/`--ask-password` must reach
+    `BastionExecutor.connect()` so it's available as a key/agent-auth
+    fallback -- including for a background install job like this one, which
+    reconnects long after any interactive prompt could happen."""
+    bastion_id, cluster_id = _seed_bastion_and_cluster()
+    params = {
+        "cluster_id": cluster_id,
+        "cluster_name": "ipi-test1",
+        "bastion_id": bastion_id,
+        "platform": "vsphere",
+        "install_method": "ipi",
+        "ocp_version": "4.18",
+        "environment_profile": "vsphere-pnq2",
+        "answers": {
+            "metadata.name": "ipi-test1",
+            "baseDomain": "lab.example.com",
+            "platform.vsphere.apiVIPs": ["10.74.232.10"],
+            "platform.vsphere.ingressVIPs": ["10.74.232.11"],
+        },
+    }
+
+    class _FakeSecretsBackendWithBastionPassword(_FakeSecretsBackend):
+        def get(self, namespace, key, *, backend="keyring"):
+            if namespace == "bastion:bastion.lab.example.com" and key == "ssh_password":
+                return "s3cret"
+            return super().get(namespace, key, backend=backend)
+
+    monkeypatch.setattr(ipi, "SecretsBackend", _FakeSecretsBackendWithBastionPassword)
+
+    ipi.run(params, job_dir=None)
+
+    executor = FakeBastionExecutor.instances[-1]
+    assert executor.connect_password == "s3cret"
 
 
 def test_ipi_handler_marks_cluster_failed_on_nonzero_exit(_fake_env, monkeypatch):

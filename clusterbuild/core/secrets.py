@@ -113,6 +113,34 @@ def default_backend() -> SecretsBackend:
     return SecretsBackend()
 
 
+# -- bastion SSH password (keyring only -- see `clusterbuild bastion
+# register --password/--ask-password`) -------------------------------------
+#
+# Stored per-host so background install jobs (which reconnect to the bastion
+# many times over a multi-hour install, long after any interactive prompt)
+# can transparently fall back to password auth without needing a live user
+# around to type it in again. Paramiko always tries key/agent auth first
+# regardless of whether a password is supplied, so this is purely additive.
+
+_BASTION_PASSWORD_KEY = "ssh_password"
+
+
+def _bastion_namespace(host: str) -> str:
+    return f"bastion:{host}"
+
+
+def get_bastion_password(secrets: SecretsBackend, host: str) -> Optional[str]:
+    return secrets.get(_bastion_namespace(host), _BASTION_PASSWORD_KEY)
+
+
+def set_bastion_password(secrets: SecretsBackend, host: str, password: str) -> None:
+    secrets.set(_bastion_namespace(host), _BASTION_PASSWORD_KEY, password)
+
+
+def delete_bastion_password(secrets: SecretsBackend, host: str) -> None:
+    secrets.delete(_bastion_namespace(host), _BASTION_PASSWORD_KEY)
+
+
 def resolve_reference(ref: str, backend: SecretsBackend) -> str:
     """Resolve a `{{ keyring:<namespace>.<key> }}` placeholder used in Environment Profiles."""
     ref = ref.strip()

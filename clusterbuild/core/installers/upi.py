@@ -28,7 +28,7 @@ from clusterbuild.core.installers.base import (
 )
 from clusterbuild.core.jobs import register_job_handler
 from clusterbuild.core.preflight import run_preflight
-from clusterbuild.core.secrets import SecretsBackend
+from clusterbuild.core.secrets import SecretsBackend, get_bastion_password
 
 HTTP_SERVER_PORT = 8080
 
@@ -64,7 +64,7 @@ def run(params: dict, job_dir) -> None:  # noqa: ARG001
 
     set_cluster_status(cluster_id, "staging-manifests")
     executor = BastionExecutor(bastion.host, bastion.ssh_user, port=bastion.ssh_port)
-    executor.connect()
+    executor.connect(password=get_bastion_password(SecretsBackend(), bastion.host))
     try:
         build_and_stage_manifests(
             entry=entry,

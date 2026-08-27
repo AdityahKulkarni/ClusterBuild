@@ -26,7 +26,7 @@ from clusterbuild.core.installers.base import (
     set_cluster_status,
 )
 from clusterbuild.core.jobs import register_job_handler
-from clusterbuild.core.secrets import SecretsBackend
+from clusterbuild.core.secrets import SecretsBackend, get_bastion_password
 
 
 @register_job_handler("ipi_install")
@@ -40,7 +40,7 @@ def run(params: dict, job_dir) -> None:  # noqa: ARG001 -- job_dir unused, kept 
     set_cluster_status(cluster_id, "staging-manifests")
 
     executor = BastionExecutor(bastion.host, bastion.ssh_user, port=bastion.ssh_port)
-    executor.connect()
+    executor.connect(password=get_bastion_password(SecretsBackend(), bastion.host))
     try:
         build_and_stage_manifests(
             entry=entry,
